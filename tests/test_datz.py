@@ -786,7 +786,10 @@ class DiagnoseModeTests(unittest.TestCase):
         text = out.getvalue()
         self.assertIn(f"datz {datz.APP_VERSION}", text)
         self.assertIn("stdin: fd=", text)
-        self.assertIn("engine version webwarden", text)
+        if datz.PAYLOAD_B64 and (root / "webwarden.pyz").is_file():
+            self.assertIn("engine version webwarden", text)
+        else:
+            self.assertIn("engine error", text)
 
 
 class OutputDestinationTests(unittest.TestCase):

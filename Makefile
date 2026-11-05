@@ -7,7 +7,7 @@
 #   make key CUSTOMER="Nama" DAYS=365      (penerbit, perlu DATZ_SIGNING_KEY)
 #
 # Read LICENSE before commercial use: the source is public, running it past the
-# 14-day trial needs a signed key.
+# 20-day trial needs a signed key.
 
 PYTHON ?= python3
 PREFIX ?= /usr/local
@@ -30,7 +30,7 @@ help:
 	@echo "  make datz      embed engine ke $(DATZ) (payload diverifikasi SHA-256)"
 	@echo "  make wheel     bangun roda pip dari pyproject.toml"
 	@echo "  make test       $(words $(TESTS)) modul unittest"
-	@echo "  make lite      periksa artefak tanpa lisensi (mode uji 14 hari)"
+	@echo "  make lite      periksa artefak tanpa lisensi (mode uji 20 hari)"
 	@echo "  make pro LICENSE_KEY=DATZ1.xxx.xxx   pasang kunci Pro di mesin ini"
 	@echo "  make status    tier, sisa hari, dan sumber kunci"
 	@echo "  make key CUSTOMER=\"Nama\" DAYS=365    terbitkan kunci (penerbit saja)"
@@ -38,7 +38,7 @@ help:
 	@echo "  make clean     hapus $(BUILD) dan $(DIST)"
 	@echo ""
 	@echo "  lisensi: baca LICENSE. Source publik bukan berarti gratis."
-	@echo "  pembelian: https://portofolio.ziqintzy.my.id/"
+	@echo "  pembelian: https://lisensi.ziqintzy.my.id/"
 
 all: datz
 
@@ -65,7 +65,7 @@ wheel:
 lite: $(DATZ)
 	@echo "--- artefak Lite (tanpa kunci) ---"
 	@$(PYTHON) $(DATZ) --version
-	@$(PYTHON) -c "import sys; sys.path.insert(0,'.'); from webwarden import licensing as l; print('trial aktif : %d hari, lalu lisensi diperlukan' % l.TRIAL_DAYS); print('beli kunci   : https://portofolio.ziqintzy.my.id/'); print('aktivasi    : make pro LICENSE_KEY=...')"
+	@$(PYTHON) -c "import sys; sys.path.insert(0,'.'); from webwarden import licensing as l; print('trial aktif : %d hari, lalu lisensi diperlukan' % l.TRIAL_DAYS); print('beli kunci   : https://lisensi.ziqintzy.my.id/'); print('aktivasi    : make pro LICENSE_KEY=...')"
 
 pro:
 	@test -n "$(LICENSE_KEY)" || { echo "make pro LICENSE_KEY=DATZ1.xxxx.xxxx"; exit 2; }

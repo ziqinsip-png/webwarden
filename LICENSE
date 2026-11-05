@@ -9,12 +9,14 @@ RINGKASAN (BAHASA INDONESIA)
 Kode sumber program ini terbuka dan boleh dibaca, dipelajari, serta diaudit oleh
 siapa pun. Terbuka bukan berarti gratis.
 
-- LITE (gratis): masa uji 14 hari sejak pertama kali dijalankan di mesin kamu.
+- LITE (gratis): masa uji 20 hari sejak pertama kali dijalankan di mesin kamu.
   Setelah habis, modul pemindaian dan audit berhenti bekerja sampai lisensi
   PRO diaktifkan.
-- PRO (berbayar): satu kunci lisensi ditandatangani untuk satu pelanggan dan
-  satu lingkup produk. Kunci diterbitkan oleh pemegang kunci privat, bukan
-  dibuat sendiri. Beli di https://portofolio.ziqintzy.my.id/
+- PRO (berbayar): membership berbatas waktu dengan kunci bertanda tangan
+  Ed25519 — Rp 39.000 untuk 30 hari, Rp 99.000 untuk 90 hari, Rp 299.000 untuk
+  365 hari. Satu kunci untuk satu mesin dan berlaku di seluruh perkakas DATZ.
+  Kunci diterbitkan oleh pemegang kunci privat, bukan dibuat sendiri.
+  Pemesanan: https://lisensi.ziqintzy.my.id/
 - Dilarang: melepas, mengakali, atau melewati pemeriksaan lisensi; membagikan
   satu kunci ke banyak orang atau mesin; menghapus watermark, banner, dan catatan
   lisensi yang ditulis program ke dalam laporan.
@@ -39,7 +41,7 @@ FULL TERMS (ENGLISH)
    stores a first-run timestamp in ~/.datz/state.json, verifies a signed license
    string, and decides whether a run is licensed (Pro) or on a free trial.
 
-   "Trial" means the free 14-day evaluation period that begins the first time
+   "Trial" means the free 20-day evaluation period that begins the first time
    the Program is executed for real on a machine.
 
    "License Key" means a signed string of the form DATZ1.<payload>.<signature>
@@ -75,9 +77,11 @@ FULL TERMS (ENGLISH)
         redistributing a License Key is not permitted.
    4.3  A License Key may carry an expiry date and an optional host limit. The
         Program enforces both.
-   4.4  Licences are perpetual or subscription-based according to what the
-        Licensor sells. The terms shown at the point of purchase prevail.
-   4.5  Purchase and enquiry: https://portofolio.ziqintzy.my.id/
+   4.4  Licences are sold as time-limited memberships: 30, 90, or 365 days from
+        the date the key is minted. The expiry date travels inside the key and
+        the Program enforces it. The terms shown at the point of purchase
+        prevail.
+   4.5  Ordering and enquiry: https://lisensi.ziqintzy.my.id/
 
 5. Licence enforcement
 
@@ -154,4 +158,4 @@ FULL TERMS (ENGLISH)
    regard to conflict-of-law rules.
 
 Questions about a licence, a volume deal, or an on-premise entitlement that this
-text does not cover: https://portofolio.ziqintzy.my.id/
+text does not cover: https://lisensi.ziqintzy.my.id/

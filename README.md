@@ -63,7 +63,7 @@ sensitive-path checks, client-side secret hunting, bundle drift analysis, takeov
 version-derived CVE candidates, and read-only injection probing — then writes a Markdown report,
 a self-contained HTML report, machine-readable JSON, a reproduction script, and a verbatim
 evidence directory. `datz.py` is the same engine inside a single-file animated terminal dashboard.
-Everything is stdlib-only, GET/HEAD-only, scope-enforced, and rate-limited. Free use is a 14-day
+Everything is stdlib-only, GET/HEAD-only, scope-enforced, and rate-limited. Free use is a 20-day
 trial; ongoing commercial use requires a signed licence key.
 
 ---
@@ -233,7 +233,7 @@ Preset: **Cepat** (secret + bundle), **Standar** (injection, backdoor, takeover,
 
 Pilihan folder output (`F4`): `~/.datz/runs` di Kali, atau `Downloads/datz-runs` di laptop —
 berguna kalau kamu menyiapkan scan di satu mesin dan membaca laporan di mesin lain.
-Badge lisensi tampil di header kanan (`PRO · customer` atau `TRIAL 13h`).
+Badge lisensi tampil di header kanan (`PRO · customer` atau `TRIAL 19h`).
 
 Jalankan dari terminal asli (GNOME Terminal, kitty, xterm, Windows Terminal). `tmux`/`screen`
 didukung; konsol yang tidak mendukung ANSI 256-warna akan keluar lebih dulu dan
@@ -245,14 +245,17 @@ didukung; konsol yang tidak mendukung ANSI 256-warna akan keluar lebih dulu dan
 
 Source-nya publik dan boleh diaudit. **Terbuka bukan berarti gratis.**
 
-| | **Lite** | **Pro** |
+| | **Trial** | **Membership** |
 |---|---|---|
-| Harga | Gratis | Berbayar, satu kunci per pelanggan |
-| Masa pakai | 14 hari sejak pertama kali dijalankan | Sesuai pembelian (perpetual / langganan) |
+| Harga | Rp 0 | Rp 39.000 / 30 hari · Rp 99.000 / 90 hari · Rp 299.000 / 365 hari |
+| Masa berlaku | 20 hari sejak pertama kali dijalankan | Sesuai paket — kunci punya tanggal kedaluwarsa |
 | Modul | Semua modul read-only aktif selama trial | Semua modul, tanpa batas waktu trial |
+| Mesin | 1 mesin | 1 mesin, tanpa batas jumlah host yang diperiksa |
 | Laporan | Watermark trial di Markdown, HTML, dan `scan.json` | Watermark Pro + nama pelanggan dan ID kunci |
 | Audit | `doctor`, `license`, `-h` selalu gratis | Sama |
 | Untuk siapa | Pelajar, peneliti, yang mau mencoba dulu | Bug hunter serius, konsultan, tim yang membuat laporan ke klien |
+
+Satu kunci berlaku untuk **webwarden dan netwarden sekaligus** — tidak perlu beli dua.
 
 ```bash
 webwarden license status          # sisa hari dan tier
@@ -267,7 +270,8 @@ private key hanya dipegang penulis, jadi kunci tidak bisa dibuat sendiri. Trial 
 hari. `license.key`, `/etc/datz/<product>.key`, `DATZ_LICENSE`, dan `DATZ_LICENSE_FILE` dibaca
 sebelum trial dipakai.
 
-Beli atau tanya: **<https://portofolio.ziqintzy.my.id/>**
+Pemesanan dan harga lengkap: **<https://lisensi.ziqintzy.my.id/>** — di sana ada rincian paket dan
+formulernya; pembayarannya manual, kuncinya dikirim setelah transfer.
 
 > **Jujur di muka.** Programnya Python dan source-nya terbuka, jadi pintu lisensi adalah friksi
 > dan niat baik, bukan perlindungan yang mustahil dibobol. Lisensi yang kamu beli adalah cara
@@ -336,7 +340,7 @@ mencetak stempel lisensi di dalam laporan.
 ```
 webwarden/            mesin (stdlib only)
   cli.py              parser, perintah, gerbang lisensi
-  licensing.py        Ed25519 RFC 8032, trial 14 hari, aktivasi kunci
+  licensing.py        Ed25519 RFC 8032, trial 20 hari, aktivasi kunci
   recon.py checks.py injection.py backdoors.py bundles.py secrets.py
   chains.py cve.py nuclei.py takeover.py evidence.py poc.py
   report.py html.py audit.py scenario.py diffing.py

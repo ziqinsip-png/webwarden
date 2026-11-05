@@ -546,7 +546,7 @@ def build_parser() -> argparse.ArgumentParser:
         sub,
         product=licensing.PRODUCT_WEBWARDEN,
         blurb=(
-            "webwarden berjalan dalam masa uji 14 hari.\n"
+            f"webwarden berjalan dalam masa uji {licensing.TRIAL_DAYS} hari.\n"
             "Setelah itu kunci lisensi berbayar diperlukan.\n"
             "\n"
             "      webwarden license status      sisa hari uji coba\n"

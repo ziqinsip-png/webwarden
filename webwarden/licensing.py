@@ -1,4 +1,4 @@
-"""Ed25519-signed license keys and the 14-day trial gate shared by DATZ tools.
+"""Ed25519-signed license keys and the 20-day trial gate shared by DATZ tools.
 
 Stdlib only, so the tools keep their single-file zipapp delivery. The
 verification public key is embedded below; the signing key never ships and
@@ -36,7 +36,7 @@ __all__ = [
     "verify_license",
 ]
 
-TRIAL_DAYS = 14
+TRIAL_DAYS = 20
 PURCHASE_URL = "https://portofolio.ziqintzy.my.id/"
 PREFIX = "DATZ1"
 PRODUCT_WEBWARDEN = "webwarden"

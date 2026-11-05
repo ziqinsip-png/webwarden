@@ -4178,7 +4178,7 @@ def build_cli() -> argparse.ArgumentParser:
             "          --accounts-owned --i-am-authorized\n"
             "      python3 datz.py --cli access-audit -h\n"
             "\n"
-            "  Lisensi dan masa uji coba 14 hari:\n"
+            "  Lisensi dan masa uji coba 20 hari:\n"
             "      python3 datz.py --license\n"
             "      python3 datz.py --license \"DATZ1.…\"\n"
             "\n"
