@@ -1,0 +1,157 @@
+Copyright (c) 2026 Ahmad Roziqin
+
+COVERED PROGRAMS: the "webwarden" scanner and the "datz" terminal console
+(including every file in this repository).
+
+------------------------------------------------------------------------------------------------
+RINGKASAN (BAHASA INDONESIA)
+------------------------------------------------------------------------------------------------
+Kode sumber program ini terbuka dan boleh dibaca, dipelajari, serta diaudit oleh
+siapa pun. Terbuka bukan berarti gratis.
+
+- LITE (gratis): masa uji 14 hari sejak pertama kali dijalankan di mesin kamu.
+  Setelah habis, modul pemindaian dan audit berhenti bekerja sampai lisensi
+  PRO diaktifkan.
+- PRO (berbayar): satu kunci lisensi ditandatangani untuk satu pelanggan dan
+  satu lingkup produk. Kunci diterbitkan oleh pemegang kunci privat, bukan
+  dibuat sendiri. Beli di https://portofolio.ziqintzy.my.id/
+- Dilarang: melepas, mengakali, atau melewati pemeriksaan lisensi; membagikan
+  satu kunci ke banyak orang atau mesin; menghapus watermark, banner, dan catatan
+  lisensi yang ditulis program ke dalam laporan.
+- Wajib: program ini hanya boleh dijalankan pada aset yang kamu miliki sendiri
+  atau yang kamu punya izin tertulis untuk mengujinya.
+- Tidak ada jaminan. Tanggung jawab penulis dibatasi undang-undang yang berlaku.
+- Jujur di muka: sumbernya publik, jadi pintunya adalah friksi dan niat baik,
+  bukan perlindungan yang mustahil dibobol. Pembelian lisensi adalah cara
+  mendukung pengembangan alat ini.
+
+------------------------------------------------------------------------------------------------
+FULL TERMS (ENGLISH)
+------------------------------------------------------------------------------------------------
+
+1. Definitions
+
+   "Program" means the webwarden and datz software distributed from this
+   repository, in source or packaged form, together with modifications and
+   derived builds of it.
+
+   "License Manager" means the `licensing` module shipped with the Program. It
+   stores a first-run timestamp in ~/.datz/state.json, verifies a signed license
+   string, and decides whether a run is licensed (Pro) or on a free trial.
+
+   "Trial" means the free 14-day evaluation period that begins the first time
+   the Program is executed for real on a machine.
+
+   "License Key" means a signed string of the form DATZ1.<payload>.<signature>
+   minted by the Licensor with the private half of the Ed25519 key pair whose
+   public half is embedded in the Program.
+
+   "Licensor" means Ahmad Roziqin, the copyright holder.
+
+   "You" means the individual or entity running the Program.
+
+2. Source availability, not free commercial use
+
+   You may read, study, audit, print, and share unmodified copies of the source
+   for evaluation, teaching, and security research. You may open pull requests.
+   Public source code does not grant a free commercial licence; running the
+   Program beyond the Trial requires a License Key (section 4).
+
+3. Grant during the Trial
+
+   For the length of the Trial you may run the Program on your own machine, for
+   authorized assessments (section 9), at no cost, without redistribution rights.
+   The Trial is machine-global, not per-product: the Program records when it was
+   first seen and will not silently renew the period by reinstalling, renaming
+   the state file, or moving the binary.
+
+4. Commercial licence
+
+   4.1  One License Key is issued for one named customer and one product scope.
+        A key may be scoped to a single product (webwarden, netwarden) or to all
+        products of the Licensor.
+   4.2  A License Key may be active on the machines of one customer acting as
+        one team. Selling, lending, sub-licensing, publishing, or otherwise
+        redistributing a License Key is not permitted.
+   4.3  A License Key may carry an expiry date and an optional host limit. The
+        Program enforces both.
+   4.4  Licences are perpetual or subscription-based according to what the
+        Licensor sells. The terms shown at the point of purchase prevail.
+   4.5  Purchase and enquiry: https://portofolio.ziqintzy.my.id/
+
+5. Licence enforcement
+
+   5.1  The Program checks the licence before running any work command and prints
+        the resulting tier in its banner, in the terminal, and in every report
+        artifact (Markdown, HTML, JSON).
+   5.2  Commands that only read state or remove rules the Program previously
+        added are deliberately left free, so that an expired trial can never
+        strand live traffic behind orphaned rules.
+   5.3  You agree not to circumvent, disable, reverse-engineer around, patch,
+        fork with the purpose of removing, or otherwise defeat the License
+        Manager, and not to distribute a build in which it has been defeated.
+   5.4  You agree not to strip, forge, or alter the licence watermark, banner, or
+        report stamp.
+   5.5  Honest disclosure: the Program is written in Python and its source is
+        public, so a determined user can bypass the gate. Section 5.3 is a
+        contractual boundary, not a technical guarantee. Buying a licence is how
+        you support continued development of the tool.
+
+6. Key issuance
+
+   Only the Licensor holds the private signing key. The Program can verify a
+   License Key but cannot mint one. Any tool claiming to generate working keys
+   for this Program is unaffiliated, is likely fraudulent, and voids no term of
+   this licence.
+
+7. Copyleft-free contributions
+
+   Contributions you send to this repository may be adopted, licensed, and sold
+   by the Licensor. Contributing means you grant that permission and confirm you
+   have the right to give it.
+
+8. Trademarks
+
+   The names webwarden, netwarden, datz, and the associated marks stay with the
+   Licensor. They do not transfer with the source.
+
+9. Authorized use only
+
+   9.1  You may point the Program only at hosts, networks, accounts, and
+        applications that you own or that you have written permission to test
+        (a bug-bounty programme scope, an employer's own estate, a training lab,
+        or a customer engagement).
+   9.2  The Program requires explicit confirmation flags for that reason, keeps
+        its checks read-only by design, and refuses out-of-scope targets.
+   9.3  You are solely responsible for complying with the law of your
+        jurisdiction and with the rules of the programme you are testing under.
+        The Licensor accepts no liability for misuse.
+
+10. Warranty disclaimer
+
+   THE PROGRAM IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IT FINDS WHAT IT FINDS
+   AND MAY MISLABEL IT. EVERY RESULT MUST BE VERIFIED BY A HUMAN BEFORE IT IS
+   REPORTED TO ANYONE.
+
+11. Limitation of liability
+
+   TO THE MAXIMUM EXTENT PERMITTED BY LAW THE LICENSOR IS NOT LIABLE FOR ANY
+   INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR PUNITIVE DAMAGES, OR FOR ANY
+   LOSS OF DATA, PROFITS, REPUTATION, OR ACCESS, ARISING OUT OF THE USE OF OR
+   INABILITY TO USE THE PROGRAM.
+
+12. Termination
+
+   Breaching section 5 or section 9 ends the rights granted here immediately. On
+   termination you must stop running the Program and delete builds derived from
+   it. Sections 8, 10, 11, and 13 survive.
+
+13. Governing law
+
+   This licence is governed by the laws of the Republic of Indonesia, without
+   regard to conflict-of-law rules.
+
+Questions about a licence, a volume deal, or an on-premise entitlement that this
+text does not cover: https://portofolio.ziqintzy.my.id/

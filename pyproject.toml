@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "webwarden"
+version = "0.10.0"
+description = "Scoped, read-only web recon and vulnerability reporting for authorized assessments"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "Ahmad Roziqin" }]
+keywords = ["bug-bounty", "recon", "security", "authorized-testing"]
+classifiers = ["Programming Language :: Python :: 3", "Topic :: Security"]
+
+[project.scripts]
+webwarden = "webwarden.cli:main"
+datz = "datz:main"
+
+[tool.setuptools]
+py-modules = ["datz", "pack_datz"]
+packages = ["webwarden"]

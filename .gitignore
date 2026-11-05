@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.build/
+*.pyz
+dist/
+reports/
+lab-audit/
+access-audit/
+.datz/
+.venv/
+venv/
+.idea/
+.vscode/
