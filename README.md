@@ -393,7 +393,7 @@ di lab milikmu sendiri, dan bandingkan temuan dengan realitas.
 
 ## Penulis
 
-**Ahmad Roziqin** — <https://ziqintzy.my.id> · <https://portofolio.ziqintzy.my.id> · GitHub [@ziqinsip-png](https://github.com/ziqinsip-png)
+**Ahmad Roziqin** — <https://ziqintzy.my.id> · <https://portofolio.ziqintzy.my.id> · GitHub [@ziqinsip-png](https://github.com/ziqinsip-png) · LinkedIn [in/ahmad-roziqin](https://www.linkedin.com/in/ahmad-roziqin)
 
 Lisensi, pertanyaan komersial, atau laporan bug: buka halaman kontak di portofolio di atas, atau
 buat issue di repo ini.
