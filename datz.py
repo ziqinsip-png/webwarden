@@ -50,7 +50,7 @@ import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
 
-APP_VERSION = "2.7.1"
+APP_VERSION = "2.9.0"
 ENGINE_NAME = "webwarden"
 HOME = Path(os.environ.get("DATZ_HOME") or (Path.home() / ".datz"))
 RUNTIME_DIR = HOME / "runtime"
@@ -589,21 +589,21 @@ RESET = "\x1b[0m"
 CLEAR = "\x1b[2J"
 HOME_CURSOR = "\x1b[H"
 
-# 256-colour palette: phosphor-green hacker terminal
-BG = 232
-PANEL = 234
-PANEL2 = 236
-TEXT = 114
-DIM = 71
+# 256-colour palette: midnight-blue console
+BG = 233
+PANEL = 235
+PANEL2 = 237
+TEXT = 153
+DIM = 111
 FAINT = 242
-ACCENT = 46
+ACCENT = 39
 ACCENT2 = 51
-GOOD = 46
+GOOD = 42
 WARN = 214
 BAD = 203
-CRIT = 196
-MED = 208
-LOW = 45
+CRIT = 203
+MED = 215
+LOW = 39
 INFO = 244
 INK = 16
 
@@ -2152,7 +2152,7 @@ def draw_left(scr: Screen, app: App, x: int, y: int, w: int, h: int) -> None:
     row += 1
 
     auth_focus = focused == "auth"
-    bg = 236 if auth_focus else (22 if app.authorized else 52)
+    bg = 236 if auth_focus else (17 if app.authorized else 52)
     mark = "✓" if app.authorized else " "
     text = f"[{mark}] Saya pemilik / punya izin tertulis"
     fg = 231 if not app.authorized else ACCENT
@@ -2175,7 +2175,7 @@ def draw_left(scr: Screen, app: App, x: int, y: int, w: int, h: int) -> None:
         if active:
             fg, bg = INK, ACCENT
         elif focus_here:
-            fg, bg = ACCENT, 22
+            fg, bg = ACCENT, 17
         else:
             fg, bg = DIM, 236
         scr.put(bx, row, " " + text + " " * pad + " ",
@@ -2193,7 +2193,7 @@ def draw_left(scr: Screen, app: App, x: int, y: int, w: int, h: int) -> None:
         fg = INK if active else TEXT
         bg = ACCENT if active else 236
         if focus_here:
-            fg, bg = (INK if active else ACCENT), (ACCENT if active else 22)
+            fg, bg = (INK if active else ACCENT), (ACCENT if active else 17)
         label = PRESETS[key]["label"]
         if len(label) > btn_w - 1:
             label = PRESET_SHORT[key]
@@ -2327,7 +2327,7 @@ def draw_right(scr: Screen, app: App, x: int, y: int, w: int, h: int,
         text = next((opt for opt in options if len(opt) <= room), label[:room])
         seg_w = seg if idx < len(TABS) - 1 else tab_w - seg * (len(TABS) - 1)
         fg = INK if active else (ACCENT if focus_here else DIM)
-        bg = ACCENT if active else (22 if focus_here else PANEL)
+        bg = ACCENT if active else (17 if focus_here else PANEL)
         pad = max(0, seg_w - len(text))
         left = pad // 2
         line = " " * left + text + " " * (seg_w - len(text) - left)
@@ -2397,7 +2397,7 @@ def _empty(scr: Screen, x: int, y: int, w: int, h: int, text: str) -> None:
     need = len(LOGO) + 3 + len(wrapped)
     if w >= banner_w + 2 and h >= need:
         top = y + max(0, (h - need) // 2)
-        shades = (ACCENT, ACCENT, 40, 34, 29, 23)
+        shades = (ACCENT2, ACCENT, 33, 27, 21, 19)
         for i, line in enumerate(LOGO):
             scr.put(x + 1, top + i, line, (shades[i], PANEL, False, False, False))
         scr.put(x + 1, top + len(LOGO),

@@ -1191,6 +1191,8 @@ def build_chains(findings: list[Finding], recon: dict | None = None) -> list[Cha
     chains.extend(_ssrf_internal(findings))
     chains.extend(_debug_console(findings))
     chains.extend(_decoy_blocked(findings))
+    chains.extend(_graph_chains(findings))
+    chains = _dedupe(chains)
     chains.sort(key=lambda item: (
         STATUS_ORDER.get(item.status, 9),
         SEVERITY_ORDER.get(item.severity, 9),
@@ -1198,6 +1200,28 @@ def build_chains(findings: list[Finding], recon: dict | None = None) -> list[Cha
         item.title,
     ))
     return chains
+
+
+def _graph_chains(findings: list[Finding]) -> list[Chain]:
+    """Multi-hop paths from the capability graph; imported lazily to keep
+    ``chains`` importable on its own."""
+    from .capgraph import graph_chains
+
+    return graph_chains(findings)
+
+
+def _dedupe(chains: list[Chain]) -> list[Chain]:
+    """Drop chains whose link set is exactly another chain's link set."""
+    kept: list[Chain] = []
+    seen: set[frozenset[str]] = set()
+    for chain in chains:
+        signature = frozenset(f"{link.host.lower()}|{link.url}|{link.title}"
+                              for link in chain.links)
+        if signature in seen:
+            continue
+        seen.add(signature)
+        kept.append(chain)
+    return kept
 
 
 def apply_chain_ids(chains: list[Chain], findings: list[Finding]) -> None:

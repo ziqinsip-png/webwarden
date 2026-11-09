@@ -21,6 +21,7 @@ from webwarden import bundles as bundle_mod
 from webwarden import backdoors as backdoor_mod
 from webwarden import chains as chain_mod
 from webwarden import cli, decoy as decoy_mod, netcheck, whoisq
+from webwarden import disclosure
 from webwarden import injection as injection_mod
 from webwarden.audit import (
     AUDIT_SCHEMA,
@@ -821,6 +822,207 @@ class SecurityTxtTests(unittest.TestCase):
         self.assertIsNotNone(moment)
         self.assertEqual(moment.year, 2030)
         self.assertIsNone(_parse_expiry("not-a-date"))
+
+
+class DisclosureDetectorTests(unittest.TestCase):
+    DJANGO = (
+        b"<h1>DisallowedHost at /</h1>"
+        b"<p>You're seeing this error because you have <code>DEBUG = True</code>"
+        b" in your Django settings file.</p>"
+    )
+
+    def test_django_debug_page(self):
+        self.assertEqual(disclosure.match_error(self.DJANGO)["kind"], "django")
+
+    def test_php_fatal_error(self):
+        body = (b"<b>Fatal error</b>: Uncaught Error: boom in "
+                b"<b>/var/www/html/index.php</b> on line <b>12</b>")
+        self.assertEqual(disclosure.match_error(body)["kind"], "php_fatal")
+
+    def test_php_notice_is_low(self):
+        body = (b"<b>Warning</b>: include(config.php): failed to open stream "
+                b"in <b>/home/site/public_html/app.php</b> on line <b>7</b>")
+        signature = disclosure.match_error(body)
+        self.assertEqual(signature["kind"], "php_notice")
+        self.assertEqual(signature["severity"], "low")
+
+    def test_sql_error_page(self):
+        body = (b"You have an error in your SQL syntax; check the manual that "
+                b"corresponds to your MySQL server version at line 1")
+        self.assertEqual(disclosure.match_error(body)["kind"], "sql_error")
+
+    def test_python_traceback(self):
+        body = (b'Traceback (most recent call last):\n  File "/srv/app/main.py", '
+                b"line 42, in <module>\nValueError: boom")
+        self.assertEqual(
+            disclosure.match_error(body)["kind"], "python_traceback")
+
+    def test_werkzeug_console_is_critical(self):
+        body = (b"<title>Werkzeug Debugger</title><p>Console mode: active</p>"
+                b"<p>Debugger PIN: 123-456-789</p>")
+        signature = disclosure.match_error(body)
+        self.assertEqual(signature["kind"], "werkzeug")
+        self.assertEqual(signature["severity"], "critical")
+
+    def test_plain_page_is_not_an_error(self):
+        body = (b"<html><body><h1>Selamat datang</h1>"
+                b"<p>Warning: pakai helm saat berkendara.</p></body></html>")
+        self.assertIsNone(disclosure.match_error(body))
+
+    def test_excerpt_is_a_single_line(self):
+        signature = disclosure.match_error(self.DJANGO)
+        excerpt = disclosure.error_excerpt(self.DJANGO, signature)
+        self.assertIn("DEBUG = True", excerpt)
+        self.assertNotIn("\n", excerpt)
+
+    def test_json_array_of_records(self):
+        body = json.dumps([
+            {"id": 1, "email": "a@example.com", "name": "A"},
+            {"id": 2, "email": "b@example.com", "name": "B"},
+        ]).encode()
+        info = disclosure.json_collection(
+            body, {"content-type": "application/json; charset=utf-8"})
+        self.assertEqual(info["count"], 2)
+        self.assertEqual(info["shape"], "array")
+        self.assertIn("email", info["sensitive"])
+
+    def test_json_wrapped_collection(self):
+        body = json.dumps({"data": [
+            {"id": 1, "username": "a"},
+            {"id": 2, "username": "b"},
+        ]}).encode()
+        info = disclosure.json_collection(
+            body, {"content-type": "application/json"})
+        self.assertEqual(info["shape"], "data")
+
+    def test_single_record_is_not_a_collection(self):
+        body = json.dumps({"id": 1, "email": "a@example.com"}).encode()
+        self.assertIsNone(disclosure.json_collection(
+            body, {"content-type": "application/json"}))
+
+    def test_scalar_array_is_not_a_collection(self):
+        body = json.dumps(["a", "b", "c"]).encode()
+        self.assertIsNone(disclosure.json_collection(
+            body, {"content-type": "application/json"}))
+
+    def test_html_is_not_json(self):
+        self.assertIsNone(disclosure.json_collection(
+            b"<html><body>ok</body></html>", {"content-type": "text/html"}))
+
+
+class DisclosureCheckerTests(unittest.TestCase):
+    class Client:
+        scopes = ["example.com"]
+
+        def __init__(self, routes):
+            self.routes = routes
+            self.calls = []
+
+        def get(self, url, **kwargs):
+            self.calls.append(url)
+            path = urlsplit(url).path
+            if path in self.routes:
+                status, headers, body = self.routes[path]
+                return HttpResult(
+                    url=url, status=status, ok=True, headers=headers,
+                    body=body, chain=[(url, status)],
+                )
+            return HttpResult(url=url, status=404, ok=False, headers={},
+                              body=b"not found", chain=[(url, 404)])
+
+    def _result(self, path, body, status=200,
+                content_type="text/html"):
+        url = "https://example.com" + path
+        return HttpResult(
+            url=url, status=status, ok=True,
+            headers={"content-type": content_type}, body=body,
+            chain=[(url, status)],
+        )
+
+    def test_error_page_is_reported_and_reproduced(self):
+        body = DisclosureDetectorTests.DJANGO
+        client = self.Client({"/boom": (500, {"content-type": "text/html"}, body)})
+        checker = Checker(client, [], [])
+        result = self._result("/boom", body, status=500)
+        checker._check_error_pages(
+            [("example.com", "https://example.com/boom", result)])
+        self.assertEqual(len(checker.findings), 1)
+        finding = checker.findings[0]
+        self.assertEqual(finding.severity, "high")
+        self.assertTrue(finding.verified)
+        self.assertIn("DEBUG = True", finding.evidence)
+
+    def test_unstable_error_page_needs_manual_review(self):
+        body = DisclosureDetectorTests.DJANGO
+        client = self.Client({
+            "/boom": (500, {"content-type": "text/html"}, body),
+        })
+        checker = Checker(client, [], [])
+        result = self._result("/boom", body, status=500)
+
+        original = client.get
+        state = {"first": True}
+
+        def flaky(url, **kwargs):
+            state["first"] = False
+            return HttpResult(url=url, status=200, ok=True,
+                              headers={"content-type": "text/html"},
+                              body=b"<html>selamat datang</html>",
+                              chain=[(url, 200)])
+
+        client.get = flaky
+        checker._check_error_pages(
+            [("example.com", "https://example.com/boom", result)])
+        finding = checker.findings[0]
+        self.assertFalse(finding.verified)
+        self.assertEqual(finding.confidence, "needs manual verification")
+
+    def test_json_collection_is_reported(self):
+        body = json.dumps([
+            {"id": 1, "email": "a@example.com"},
+            {"id": 2, "email": "b@example.com"},
+        ]).encode()
+        client = self.Client({
+            "/api/users": (200, {"content-type": "application/json"}, body),
+        })
+        checker = Checker(client, [], [])
+        result = self._result("/api/users", body,
+                              content_type="application/json")
+        checker._check_json_collections(
+            [("example.com", "https://example.com/api/users", result)])
+        self.assertEqual(len(checker.findings), 1)
+        finding = checker.findings[0]
+        self.assertEqual(finding.severity, "high")
+        self.assertTrue(finding.verified)
+        self.assertIn("Fields:", finding.evidence)
+        self.assertNotIn("a@example.com", finding.evidence)
+
+    def test_catch_all_json_is_not_reported(self):
+        body = json.dumps([
+            {"id": 1, "email": "a@example.com"},
+            {"id": 2, "email": "b@example.com"},
+        ]).encode()
+        client = self.Client({
+            "/api/users": (200, {"content-type": "application/json"}, body),
+        })
+        original = client.get
+
+        def everything(url, **kwargs):
+            result = original(url, **kwargs)
+            if result.status == 404:
+                result.status = 200
+                result.ok = True
+                result.headers = {"content-type": "application/json"}
+                result.body = body
+            return result
+
+        client.get = everything
+        checker = Checker(client, [], [])
+        result = self._result("/api/users", body,
+                              content_type="application/json")
+        checker._check_json_collections(
+            [("example.com", "https://example.com/api/users", result)])
+        self.assertFalse(checker.findings)
 
 
 class SecretTests(unittest.TestCase):
@@ -1933,6 +2135,61 @@ class DecoyAndChainTests(unittest.TestCase):
             [link.role for link in chain.links], ["injection", "precondition"])
         self.assertIn("session cookie lacks security attributes",
                       chain.summary.lower())
+
+    def test_capability_graph_builds_three_hop_chain(self):
+        idor = self._finding(
+            "Object accessible without authentication (possible IDOR/BOLA)",
+            "high", "access-control")
+        xss = self._finding(
+            "Reflected HTML injection (possible XSS) in parameter 'q'",
+            "medium", "xss")
+        cookie = self._finding(
+            "Sensitive cookie sid missing security attributes", "medium",
+            "cookies")
+        chains = [
+            item for item in chain_mod.build_chains([idor, xss, cookie])
+            if item.id.startswith("graph-")
+        ]
+        self.assertEqual(len(chains), 1)
+        chain = chains[0]
+        self.assertEqual(len(chain.links), 3)
+        self.assertEqual(chain.status, "partial")
+        self.assertEqual(chain.severity, "medium")
+        self.assertEqual(chain.links[0].url, idor.url)
+        self.assertEqual(chain.links[-1].url, cookie.url)
+        self.assertIn("manual-verification", chain.limitations)
+
+    def test_capability_graph_never_crosses_hosts(self):
+        idor = self._finding(
+            "Object accessible without authentication (possible IDOR/BOLA)",
+            "high", "access-control", host="a.example.com")
+        xss = self._finding(
+            "Reflected HTML injection (possible XSS) in parameter 'q'",
+            "medium", "xss", host="b.example.com")
+        cookie = self._finding(
+            "Sensitive cookie sid missing security attributes", "medium",
+            "cookies", host="b.example.com")
+        chains = [
+            item for item in chain_mod.build_chains([idor, xss, cookie])
+            if item.id.startswith("graph-")
+        ]
+        self.assertEqual(chains, [])
+
+    def test_capability_graph_skips_decoys(self):
+        idor = self._finding(
+            "Object accessible without authentication (possible IDOR/BOLA)",
+            "high", "access-control")
+        xss = self._finding(
+            "Reflected HTML injection (possible XSS) in parameter 'q'",
+            "medium", "xss")
+        cookie = self._finding(
+            "Sensitive cookie sid missing security attributes", "medium",
+            "cookies", decoy=True)
+        chains = [
+            item for item in chain_mod.build_chains([idor, xss, cookie])
+            if item.id.startswith("graph-")
+        ]
+        self.assertEqual(chains, [])
 
     def test_log_poisoning_chain_stays_a_hypothesis(self):
         lfi = self._finding(

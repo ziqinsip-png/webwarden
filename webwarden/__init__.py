@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-__version__ = "0.10.1"
+__version__ = "0.12.0"
 
 AUTHORIZED_USE_NOTICE = (
     "Use webwarden only on domains you own or are explicitly authorized to test "
@@ -67,5 +67,9 @@ AUTHORIZED_USE_NOTICE = (
     "enumeration, and no sharing or permission changes. It refuses URLs outside "
     "the target host and holds session headers back over plain HTTP unless "
     "--allow-auth-http is given for a local lab; report text and PoC commands "
-    "never contain the session values."
+    "never contain the session values. Disclosure checks re-fetch pages that "
+    "were already discovered (GET only, capped by --pages) to look for verbose "
+    "error and stack-trace signatures and for unauthenticated JSON collections; "
+    "JSON findings list record fields only, never values, and each candidate "
+    "must reproduce on a second request."
 )

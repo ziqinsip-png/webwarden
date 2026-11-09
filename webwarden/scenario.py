@@ -512,6 +512,14 @@ def render_coverage(recon: dict, stats: dict, findings) -> list[str]:
     if backdoors.get("enabled"):
         rows.append(("Web shell / backdoor", "signature path",
                      stats.get("backdoor_findings", 0)))
+    disclosure = recon.get("disclosure") or {}
+    if disclosure.get("enabled"):
+        pages = disclosure.get("pages_scanned", 0)
+        rows.append(("Verbose error / stack trace", f"GET {pages} halaman",
+                     disclosure.get("errors", 0)))
+        rows.append(("Endpoint JSON tanpa autentikasi",
+                     f"GET {pages} halaman",
+                     disclosure.get("json", 0)))
     rows.append(("Exposure (config/backup/debug/RCE surface)", "cek path",
                  exposure_count))
     if rows:

@@ -21,6 +21,7 @@ from urllib.parse import (
 from . import backdoors as backdoor_scan
 from . import bundles as bundle_recon
 from . import decoy
+from . import disclosure
 from . import injection as injection_scan
 from .evidence import (
     DEFAULT_EVIDENCE_BYTES,
@@ -39,7 +40,7 @@ from .poc import (
     for_finding as poc_for_finding,
     full_capture,
 )
-from .recon import Probe
+from .recon import STATIC_EXTENSIONS, Probe
 from .secrets import scan_text
 from .tokens import CookieView, cookie_summary, decode_jwt, parse_cookies
 from .util import (
@@ -726,6 +727,7 @@ class Checker:
         backdoors: bool = True,
         injection_requests: int = 180,
         backdoor_requests: int = 80,
+        page_requests: int = 20,
     ) -> None:
         self.client = client
         self.probes = probes
@@ -759,6 +761,11 @@ class Checker:
         self.scan_backdoors = backdoors
         self.injection_requests = max(0, injection_requests)
         self.backdoor_requests = max(0, backdoor_requests)
+        self.page_requests = max(0, page_requests)
+        self.pages_scanned = 0
+        self.page_fetches = 0
+        self.error_page_hits = 0
+        self.json_endpoint_hits = 0
         self.injection_meta: dict = {}
         self.backdoor_meta: dict = {}
         self.injection_count = 0
@@ -798,6 +805,7 @@ class Checker:
         self._finalize_headers()
         self._finalize_cookies()
         self._check_crawled_listings()
+        self._check_disclosure()
         if self.scan_secrets:
             self._check_client_secrets()
         if self.scan_bundles:
@@ -1360,6 +1368,188 @@ class Checker:
                     result = full
             self.evidence.attach(finding, result, f"directory listing {url}")
         self._add(finding)
+
+    def _check_disclosure(self) -> None:
+        """Scan fetched pages for verbose errors and open JSON collections."""
+        pages = self._disclosure_pages()
+        self._check_error_pages(pages)
+        self._check_json_collections(pages)
+
+    def _disclosure_pages(self) -> list[tuple[str, str, HttpResult]]:
+        pages: list[tuple[str, str, HttpResult]] = []
+        seen: set[str] = set()
+
+        def add(host: str, url: str, result: HttpResult | None) -> None:
+            if not result or not result.body or not url or url in seen:
+                return
+            seen.add(url)
+            pages.append((host, url, result))
+
+        for probe in self.probes:
+            if probe.live and probe.result and probe.url:
+                add(probe.host, probe.result.final_url or probe.url,
+                    probe.result)
+        for url, result in self._crawled.items():
+            add((urlsplit(url).hostname or "").lower(), url, result)
+
+        budget = self.page_requests
+        for url in self.urls:
+            if budget <= 0:
+                break
+            if url in seen or not self._in_client_scope(url):
+                continue
+            parsed = urlsplit(url)
+            name = parsed.path.rsplit("/", 1)[-1]
+            if "." in name and (
+                "." + name.rsplit(".", 1)[-1].lower()) in STATIC_EXTENSIONS:
+                continue
+            budget -= 1
+            result = self.client.get(url, follow=True, read_limit=65536)
+            self.page_fetches += 1
+            if not result.ok or not result.body:
+                continue
+            add((parsed.hostname or "").lower(), result.final_url or url,
+                result)
+        self.pages_scanned = len(pages)
+        return pages
+
+    def _check_error_pages(
+        self, pages: list[tuple[str, str, HttpResult]]
+    ) -> None:
+        reported: set[tuple[str, str]] = set()
+        for host, url, result in pages:
+            if len(reported) >= 8:
+                break
+            signature = disclosure.match_error(result.body, result.status)
+            if signature is None:
+                continue
+            key = (host, signature["kind"])
+            if key in reported:
+                continue
+            reported.add(key)
+            confirmation = self.client.get(url, follow=True, read_limit=65536)
+            confirmed = False
+            if confirmation.ok and confirmation.body:
+                again = disclosure.match_error(
+                    confirmation.body, confirmation.status)
+                confirmed = bool(again and again["kind"] == signature["kind"])
+            source = confirmation if confirmed else result
+            excerpt = disclosure.error_excerpt(source.body, signature)
+            finding = Finding(
+                title=signature["title"],
+                severity=signature["severity"],
+                category="exposure",
+                host=host,
+                url=url,
+                description=signature["description"],
+                remediation=signature["remediation"],
+                evidence=f"Matched line:\n{excerpt}",
+                confidence=CONFIDENCE_FIRM if confirmed else CONFIDENCE_MANUAL,
+                verified=confirmed,
+                verification=(
+                    "same error template reproduced on two requests"
+                    if confirmed else
+                    "signature matched once; a second request did not "
+                    "reproduce it"
+                ),
+            )
+            self._stamp(
+                finding,
+                reproductions=2 if confirmed else 1,
+                stable=confirmed if confirmed else None,
+                result=source,
+            )
+            self.evidence.attach(
+                finding, source, f"{signature['kind']} error page {url}",
+                intro=f"Error signature: {signature['kind']}",
+            )
+            self._add(finding)
+            self.error_page_hits += 1
+
+    def _check_json_collections(
+        self, pages: list[tuple[str, str, HttpResult]]
+    ) -> None:
+        reported: set[str] = set()
+        per_host: dict[str, int] = {}
+        for host, url, result in pages:
+            if len(reported) >= 6:
+                break
+            if per_host.get(host, 0) >= 2:
+                continue
+            info = disclosure.json_collection(result.body, result.headers)
+            if info is None:
+                continue
+            parsed = urlsplit(url)
+            origin = f"{parsed.scheme}://{parsed.netloc}"
+            if self._is_catch_all(origin, parsed.path or "/", result):
+                continue
+            confirmation = self.client.get(url, follow=True, read_limit=65536)
+            confirmed = False
+            if confirmation.ok and confirmation.body:
+                again = disclosure.json_collection(
+                    confirmation.body, confirmation.headers)
+                confirmed = bool(
+                    again
+                    and again["count"] == info["count"]
+                    and again["keys"] == info["keys"]
+                )
+            listed = ", ".join(info["keys"][:8]) or "(no field names)"
+            sensitive = ", ".join(info["sensitive"][:6])
+            summary = (
+                f"Unauthenticated GET {url}\n"
+                f"Records: {info['count']}\n"
+                f"Shape: {info['shape']}\n"
+                f"Fields: {listed}\n"
+                "Values: omitted from this report; the raw response is kept "
+                "in the private evidence directory only."
+            )
+            finding = Finding(
+                title="Unauthenticated JSON endpoint returns records",
+                severity="high" if info["sensitive"] else "medium",
+                category="exposure",
+                host=host,
+                url=url,
+                description=(
+                    f"A GET without any session returned {info['count']} JSON "
+                    f"record(s) (shape: `{info['shape']}`) with fields: "
+                    f"{listed}. "
+                    + (
+                        f"Fields that usually stay private are present: "
+                        f"{sensitive}. "
+                        if sensitive else ""
+                    )
+                    + "Values are omitted from the report. Confirm whether "
+                      "these records are meant to be public before reporting."
+                ),
+                remediation=(
+                    "Require authentication and an object-level authorization "
+                    "check on this endpoint, return only the caller's own "
+                    "records, and avoid exposing internal identifiers."
+                ),
+                confidence=CONFIDENCE_MANUAL,
+                verified=confirmed,
+                verification=(
+                    "same record count and field set returned twice"
+                    if confirmed else
+                    "collection returned once; a second request differed"
+                ),
+            )
+            self._stamp(
+                finding,
+                reproductions=2 if confirmed else 1,
+                stable=confirmed,
+                result=confirmation if confirmed else result,
+            )
+            self.evidence.attach(
+                finding, confirmation if confirmed else result,
+                f"json collection {url}",
+                intro=summary,
+            )
+            finding.evidence = summary
+            self._add(finding)
+            self.json_endpoint_hits += 1
+            reported.add(url)
+            per_host[host] = per_host.get(host, 0) + 1
 
     def _check_cors(self, probe: Probe) -> None:
         if not probe.url:

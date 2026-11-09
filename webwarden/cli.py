@@ -327,6 +327,10 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--no-backdoors", action="store_true",
                       help="skip read-only checks for common web shell and "
                            "backdoor paths")
+    scan.add_argument("--pages", type=int, default=20,
+                      help="max crawled pages to inspect for verbose error "
+                           "pages and unauthenticated JSON endpoints "
+                           "(default 20, 0 disables)")
     scan.add_argument("--ai-audit", choices=("off", "local", "ollama"),
                       default="local",
                       help="AI-assisted audit provider (default: local, fully "
@@ -826,6 +830,11 @@ def cmd_scan(args) -> int:
         "findings": 0, "note": "",
     }
     waf_meta: dict = {"checked_hosts": 0, "providers": [], "note": ""}
+    disclosure_meta: dict = {
+        "enabled": not args.recon_only,
+        "page_budget": max(0, args.pages),
+        "pages_scanned": 0, "fetched": 0, "errors": 0, "json": 0,
+    }
     if not args.recon_only:
         checker = Checker(
             client,
@@ -845,6 +854,7 @@ def cmd_scan(args) -> int:
             bundles=not args.no_bundles,
             injection=not args.no_injection,
             backdoors=not args.no_backdoors,
+            page_requests=max(0, args.pages),
         )
         findings = checker.run()
         if checker.bundle_meta:
@@ -855,6 +865,12 @@ def cmd_scan(args) -> int:
             backdoor_meta = checker.backdoor_meta
         if checker.waf_meta:
             waf_meta = checker.waf_meta
+        disclosure_meta.update({
+            "pages_scanned": checker.pages_scanned,
+            "fetched": checker.page_fetches,
+            "errors": checker.error_page_hits,
+            "json": checker.json_endpoint_hits,
+        })
         for probe_meta in (injection_meta, backdoor_meta):
             for warning in probe_meta.get("warnings") or []:
                 warnings.append(warning)
@@ -1048,6 +1064,7 @@ def cmd_scan(args) -> int:
         "injection": injection_meta,
         "backdoors": backdoor_meta,
         "waf": waf_meta,
+        "disclosure": disclosure_meta,
         "chains": chain_meta,
         "ai": {
             "requested": args.ai_audit,

@@ -153,6 +153,8 @@ Python 3.10+. Tidak perlu API key, tidak perlu akun, tidak ada telemetri.
 | Takeover | aktif | Dangling CNAME ke layanan yang belum diprovision |
 | Injection | aktif | SQLi / SSTI / XSS / LFI / SSRF / CRLF, probe non-destruktif (`--no-injection` untuk mematikan) |
 | Backdoors | aktif | Jejak web shell pada path yang ada (`--no-backdoors` untuk mematikan) |
+| Disclosure | aktif | Error verbose / stack trace (Django DEBUG, Werkzeug console, SQL error, PHP fatal, traceback Python/Rails/Spring/Laravel/ASP.NET) dan endpoint JSON tanpa autentikasi; GET ulang ke halaman yang sudah ditemukan (`--pages`) |
+| Chain capability graph | aktif | Graf kapasitas antar temuan: idor + XSS + cookie → `graph-*` chain 3 langkah; hanya antar host yang sama, ditandai manual-verification |
 | Bypass 401/403 | **opt-in** | Normalisasi path + header proxy, GET saja (`--bypass`) |
 | robots.txt paths | **opt-in** | GET ke path `Disallow` untuk cek keterjangkauan (`--robots-paths`) |
 | NVD CVE | aktif | Kandidat CVE dari versi yang terlihat di respons |
@@ -307,6 +309,11 @@ formulernya; pembayarannya manual, kuncinya dikirim setelah transfer.
   false positive karena distro sudah menambal tanpa mengganti versi.
 - Deteksi injeksi **berbasis sinyal respons**, jadi endpoint dengan normalisasi error agresif atau
   WAF yang selalu mengembalikan 200 bisa meleset.
+- Chain ber-id `graph-*` disusun otomatis dari graf kapasitas, jadi statusnya selalu `partial` (bukti per langkah ada, langkah penghubungnya tidak dieksekusi). Chain tangan (`xss-session-*`, `sqli-database-*`, dst.) tetap jadi rujukan utama.
+- Deteksi disclosure juga berbasis **pola teks di respons**, bukan eksploitasi: error yang sudah
+  di-redirect ke halaman generik, atau JSON yang butuh parameter khusus, tidak akan terdeteksi.
+  Endpoint JSON hanya dilaporkan bila memuat ≥2 record dengan ≥2 field khas data; nama field
+  ditulis di laporan, nilainya tidak (tersimpan hanya di direktori bukti privat).
 - Subdomain takeover butuh CNAME yang benar-benar menggantung; layanan yang mengembalikan
   halaman parkir tidak akan dilaporkan sebagai takeover.
 - `upload-audit` dan `access-audit` sengaja dikunci ke lab / akun milik sendiri supaya tidak bisa
