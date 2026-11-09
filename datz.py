@@ -31,6 +31,7 @@ import argparse
 import base64
 import ctypes
 import hashlib
+import importlib
 import json
 import locale
 import os
@@ -49,7 +50,7 @@ import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
 
-APP_VERSION = "2.7.0"
+APP_VERSION = "2.7.1"
 ENGINE_NAME = "webwarden"
 HOME = Path(os.environ.get("DATZ_HOME") or (Path.home() / ".datz"))
 RUNTIME_DIR = HOME / "runtime"
@@ -180,16 +181,36 @@ def engine_version(engine: Path) -> str:
         return "unavailable"
 
 
-def load_licensing(engine: Path):
-    """Import the licence module straight out of the embedded engine zipapp."""
+def load_engine_module(engine: Path, name: str):
+    """Import a module straight out of the embedded engine zipapp."""
     if str(engine) not in sys.path:
         sys.path.insert(0, str(engine))
     try:
-        from webwarden import licensing as module
-        return module
+        return importlib.import_module(f"webwarden.{name}")
     except Exception as exc:
-        log_event(f"licensing import failed: {exc}")
+        log_event(f"engine module {name} import failed: {exc}")
         return None
+
+
+def load_licensing(engine: Path):
+    return load_engine_module(engine, "licensing")
+
+
+def validate_target(engine: Path, target: str) -> str:
+    """Apply the engine's own scope rules before launching, so a bad target
+    fails with a readable reason instead of a bare exit code 2 mid-scan."""
+    util = load_engine_module(engine, "util")
+    if util is None:
+        return target
+    try:
+        return util.normalize_target(target)
+    except util.ScopeError as exc:
+        raise ValueError(str(exc)) from exc
+
+
+def datz_license_products(module):
+    """datz.py drives the webwarden engine, so webwarden keys belong here too."""
+    return (module.PRODUCT_WEBWARDEN, module.PRODUCT_DATZ)
 
 
 def license_gate(engine: Path, command: str, quiet: bool = False) -> tuple[str, int]:
@@ -197,9 +218,10 @@ def license_gate(engine: Path, command: str, quiet: bool = False) -> tuple[str, 
     module = load_licensing(engine)
     if module is None:
         return ("", 0)
+    products = datz_license_products(module)
     try:
-        decision = (module.evaluate(module.PRODUCT_DATZ) if quiet else
-                    module.enforce(module.PRODUCT_DATZ, command))
+        decision = (module.evaluate(products) if quiet else
+                    module.enforce(products, command))
     except module.LicenseError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return ("", 3)
@@ -215,7 +237,7 @@ def license_flow(engine: Path, value: str) -> int:
     namespace = argparse.Namespace(
         license_action="activate" if value else "status",
         key=value,
-        product=module.PRODUCT_DATZ,
+        product=datz_license_products(module),
     )
     return module.run_license_command(namespace)
 
@@ -1301,6 +1323,13 @@ class App:
             opts = options_from_payload(payload)
         except ValueError as exc:
             self.notify(str(exc), True)
+            self.focus = "target"
+            return
+        try:
+            opts.target = validate_target(self.engine, opts.target)
+        except ValueError as exc:
+            self.notify(str(exc), True)
+            self.focus = "target"
             return
         try:
             outdir = new_outdir(opts.target, self.dest)
@@ -1354,7 +1383,14 @@ class App:
         run.code = code
         run.done = True
         if code != 0 and not run.error:
-            run.error = f"engine keluar dengan kode {code}"
+            reason = ""
+            for line in reversed(run.snapshot()):
+                stripped = line.strip()
+                if stripped.startswith("error:"):
+                    reason = stripped[len("error:"):].strip()
+                    break
+            run.error = (f"{reason} (kode {code})" if reason
+                         else f"engine keluar dengan kode {code}")
 
     def stop(self) -> None:
         if not self.run or self.run.done:
@@ -2661,14 +2697,25 @@ def draw_chains(scr: Screen, app: App, x: int, y: int, w: int, h: int) -> None:
         summary = chain.get("summary") or ""
         for line in textwrap.wrap(summary, max(20, w - 6)):
             block.append(("  " + line, (TEXT, PANEL, False, False, False)))
-        proof = chain.get("proof")
-        if proof:
-            block.append(("  proof: " + str(proof), (FAINT, PANEL, False, False, False)))
-        for link in chain.get("links") or []:
+        for position, link in enumerate(chain.get("links") or [], start=1):
+            role = CHAIN_ROLE_ID.get(str(link.get("role")),
+                                     str(link.get("role") or ""))
             block.append((
-                f"  → {link.get('role','')}: {link.get('title','')} "
-                f"[{link.get('severity','')}/{link.get('status','')}]",
+                f"  {position}. [{role}] {link.get('title','')} "
+                f"[{link.get('severity','')}/{link.get('status','')}] "
+                f"{link.get('reproductions',0)}x @ {link.get('host','')}",
                 (250, PANEL, False, False, False)))
+        impact = chain.get("impact") or ""
+        if impact:
+            for line in textwrap.wrap("dampak: " + impact, max(20, w - 6)):
+                block.append(("  " + line, (DIM, PANEL, False, False, False)))
+        for step in (chain.get("proof") or [])[:3]:
+            for line in textwrap.wrap("bukti: " + str(step), max(20, w - 6)):
+                block.append(("  " + line, (FAINT, PANEL, False, False, False)))
+        limitations = chain.get("limitations") or ""
+        if limitations:
+            for line in textwrap.wrap("batas: " + limitations, max(20, w - 6)):
+                block.append(("  " + line, (FAINT, PANEL, False, False, False)))
         block.append(("", STYLE_DEFAULT))
         blocks.append(block)
     flat: list[tuple[str, tuple]] = []
@@ -3443,6 +3490,15 @@ def run_tui(engine: Path, version: str, demo: bool = False,
 
 SEVERITY_ORDER = ("critical", "high", "medium", "low", "info")
 
+CHAIN_ROLE_ID = {
+    "precondition": "prasyarat",
+    "exposure": "paparan",
+    "injection": "injeksi",
+    "execution": "eksekusi",
+    "impact": "dampak",
+    "excluded": "dikecualikan",
+}
+
 
 def find_run(which: str = "") -> Path | None:
     """Resolve a run directory from a path/argument, defaulting to the newest."""
@@ -3641,7 +3697,7 @@ def chain_detail_lines(scan: dict, limit: int = 6) -> list[str]:
     """Show every chain with its proof, or why no chain could be built."""
     items = (((scan.get("recon") or {}).get("chains") or {})
              .get("items") or [])
-    lines = ["", "chains"]
+    lines = ["", "chains (exploit chain berbasis evidence - tidak dieksekusi)"]
     if not items:
         counts: dict[str, int] = {}
         for item in scan.get("findings") or []:
@@ -3655,7 +3711,20 @@ def chain_detail_lines(scan: dict, limit: int = 6) -> list[str]:
         return lines
     for item in items[:limit]:
         status = str(item.get("status") or "partial").upper()
-        lines.append(f"  [{status:<8}] {item.get('title')}")
+        severity = str(item.get("severity") or "").upper()
+        lines.append(f"  [{status:<8}] {severity} - {item.get('title')}")
+        if item.get("summary"):
+            lines.append(f"      ringkas: {item['summary']}")
+        for position, link in enumerate(item.get("links") or [], start=1):
+            role = CHAIN_ROLE_ID.get(str(link.get("role")),
+                                     str(link.get("role") or ""))
+            reproduced = link.get("reproductions", 0)
+            lines.append(
+                f"      langkah {position} [{role}/{link.get('status', '')}] "
+                f"{link.get('title', '')} ({reproduced}x reproduksi) "
+                f"@ {link.get('host', '')}")
+        if item.get("impact"):
+            lines.append(f"      dampak bila dikonfirmasi: {item['impact']}")
         for step in (item.get("proof") or [])[:3]:
             lines.append(f"      bukti: {step}")
         if item.get("limitations"):

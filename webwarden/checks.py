@@ -105,6 +105,42 @@ def _any_status_ok(body: bytes, headers: dict[str, str], status: int) -> bool:
     return status in (200, 206) and len(body) >= 32
 
 
+_NOT_FOUND_PHRASES = (
+    b"page not found", b"404 not found", b"error 404", b"404 error",
+    b"halaman tidak ditemukan", b"tidak ditemukan", b"page introuvable",
+    b"seite nicht gefunden", b"pagina niet gevonden",
+    b"p\xc3\xa1gina no encontrada", b"pagina no encontrada",
+)
+_NOT_FOUND_TITLE_RE = re.compile(
+    rb"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
+_NOT_FOUND_HEADING_RE = re.compile(
+    rb"<h[12][^>]*>(.*?)</h[12]>", re.IGNORECASE | re.DOTALL)
+_BARE_404_RE = re.compile(rb"^\s*(?:error\s*)?404(?:\s*[:\-|].*)?\s*$",
+                          re.IGNORECASE)
+
+
+def _looks_like_not_found(body: bytes) -> bool:
+    """True for an explicit soft-404 page served with HTTP 200.
+
+    Only the <title> and top-level headings are inspected, and only explicit
+    not-found wording counts, so a real file or login page that merely mentions
+    "404" somewhere in its content is never suppressed.
+    """
+    head = body[:65536]
+    lowered = head.lower()
+    if b"<title" not in lowered and b"<h1" not in lowered and b"<h2" not in lowered:
+        return False
+    regions = [m.group(1) for m in _NOT_FOUND_TITLE_RE.finditer(head)]
+    regions += [m.group(1) for m in _NOT_FOUND_HEADING_RE.finditer(head)]
+    for region in regions:
+        text = re.sub(rb"<[^>]+>", b" ", region).lower()
+        if any(phrase in text for phrase in _NOT_FOUND_PHRASES):
+            return True
+        if _BARE_404_RE.match(text.strip()):
+            return True
+    return False
+
+
 def _regex_marker(*patterns: str):
     compiled = [re.compile(pattern, re.IGNORECASE | re.MULTILINE)
                 for pattern in patterns]
@@ -1752,6 +1788,8 @@ class Checker:
             return True
         if result.status not in (200, 206):
             return False
+        if _looks_like_not_found(result.body):
+            return True
         baseline = self._soft404_baseline(origin, self._path_segments(path))
         if not baseline:
             return False

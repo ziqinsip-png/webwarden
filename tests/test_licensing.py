@@ -148,6 +148,39 @@ class LicenseTests(unittest.TestCase):
         with self.assertRaises(licensing.LicenseError):
             licensing.verify_license(key, "netwarden")
 
+    def test_datz_frontend_accepts_webwarden_key(self):
+        key = self.issue(product="webwarden")
+        products = (licensing.PRODUCT_WEBWARDEN, licensing.PRODUCT_DATZ)
+        payload = licensing.verify_license(key, products)
+        self.assertEqual(payload[licensing.PRODUCT_FIELD], "webwarden")
+
+    def test_datz_frontend_accepts_datz_key(self):
+        key = self.issue(product="datz")
+        products = (licensing.PRODUCT_WEBWARDEN, licensing.PRODUCT_DATZ)
+        self.assertTrue(licensing.verify_license(key, products))
+
+    def test_datz_frontend_accepts_universal_key(self):
+        key = self.issue(product="*")
+        products = (licensing.PRODUCT_WEBWARDEN, licensing.PRODUCT_DATZ)
+        self.assertTrue(licensing.verify_license(key, products))
+
+    def test_datz_frontend_rejects_netwarden_key(self):
+        key = self.issue(product="netwarden")
+        products = (licensing.PRODUCT_WEBWARDEN, licensing.PRODUCT_DATZ)
+        with self.assertRaises(licensing.LicenseError) as ctx:
+            licensing.verify_license(key, products)
+        self.assertIn("webwarden/datz", str(ctx.exception))
+
+    def test_activate_hint_for_product_tuple(self):
+        hint = licensing.activate_hint_for(
+            (licensing.PRODUCT_WEBWARDEN, licensing.PRODUCT_DATZ))
+        self.assertIn("webwarden license activate", hint)
+
+    def test_status_product_label_for_tuple(self):
+        report = licensing.status(
+            (licensing.PRODUCT_WEBWARDEN, licensing.PRODUCT_DATZ))
+        self.assertEqual(report["product"], "webwarden/datz")
+
     def test_expired_license_is_rejected(self):
         key = self.issue(days=-1)
         with self.assertRaises(licensing.LicenseError):

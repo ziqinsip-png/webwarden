@@ -242,12 +242,27 @@ def decode_license(license_str: str) -> dict:
     return payload
 
 
-def verify_license(license_str: str, product: str) -> dict:
+ProductSpec = str | tuple[str, ...]
+
+
+def _products(product: ProductSpec) -> tuple[str, ...]:
+    """A front-end may serve several products (datz.py drives webwarden)."""
+    if isinstance(product, str):
+        return (product,) if product else ()
+    return tuple(p for p in product if p)
+
+
+def _product_label(product: ProductSpec) -> str:
+    return "/".join(_products(product)) or "datz"
+
+
+def verify_license(license_str: str, product: ProductSpec) -> dict:
     """Return the payload when the key is signed by us and valid for `product`."""
     payload = decode_license(license_str)
     scoped = payload.get(PRODUCT_FIELD)
-    if scoped not in ("*", product):
-        raise LicenseError(f"lisensi ini bukan untuk {product}")
+    allowed = _products(product)
+    if scoped != "*" and scoped not in allowed:
+        raise LicenseError(f"lisensi ini bukan untuk {_product_label(product)}")
     expires = payload.get(EXPIRES_FIELD)
     if expires:
         try:
@@ -288,19 +303,20 @@ def _write_state(state: dict) -> None:
         pass
 
 
-def candidate_license_paths(product: str) -> list[Path]:
+def candidate_license_paths(product: ProductSpec) -> list[Path]:
     paths: list[Path] = []
     env_file = os.environ.get(LICENSE_FILE_ENV)
     if env_file:
         paths.append(Path(env_file).expanduser())
-    if product:
-        paths.append(Path("/etc/datz") / f"{product}.key")
+    for name in _products(product):
+        paths.append(Path("/etc/datz") / f"{name}.key")
+    if _products(product):
         paths.append(Path("/etc/datz/license.key"))
     paths.append(_state_dir() / "license.key")
     return paths
 
 
-def resolve_license(product: str) -> tuple[str, dict | None]:
+def resolve_license(product: ProductSpec) -> tuple[str, dict | None]:
     """Find a usable license from env, standard files, or the tool config."""
     inline = os.environ.get(LICENSE_ENV)
     if inline:
@@ -322,9 +338,12 @@ ACTIVATE_COMMANDS = {
 }
 
 
-def activate_hint_for(product: str) -> str:
-    command = ACTIVATE_COMMANDS.get(
-        product, f"{product or 'datz'} license activate <kunci>")
+def activate_hint_for(product: ProductSpec) -> str:
+    names = _products(product)
+    command = next((ACTIVATE_COMMANDS[name] for name in names
+                    if name in ACTIVATE_COMMANDS), None)
+    if command is None:
+        command = f"{names[0] if names else 'datz'} license activate <kunci>"
     return f"beli kunci lalu jalankan: {command} (info: {PURCHASE_URL})"
 
 
@@ -337,7 +356,7 @@ class Decision:
     customer: str | None
     key_id: str | None
     max_hosts: int | None
-    product: str = ""
+    product: ProductSpec = ""
 
     @property
     def trial(self) -> bool:
@@ -379,10 +398,11 @@ def record(decision: Decision) -> dict:
         "customer": decision.customer,
         "key_id": decision.key_id,
         "trial_days": TRIAL_DAYS,
+        "product": _product_label(decision.product),
     }
 
 
-def _trial_decision(days_left: int, product: str) -> Decision:
+def _trial_decision(days_left: int, product: ProductSpec) -> Decision:
     return Decision(
         tier="trial",
         label=f"trial {days_left} hari tersisa",
@@ -395,7 +415,7 @@ def _trial_decision(days_left: int, product: str) -> Decision:
     )
 
 
-def evaluate(product: str) -> Decision:
+def evaluate(product: ProductSpec) -> Decision:
     """Decide the tier without raising: license first, then the trial window."""
     source, payload = "", None
     try:
@@ -419,7 +439,7 @@ def evaluate(product: str) -> Decision:
     first = _as_date(state.get("first_run"))
     seen = _as_date(state.get("last_seen"))
     if first is None:
-        _write_state({"first_run": today.isoformat(), "last_seen": today.isoformat(), "product": product})
+        _write_state({"first_run": today.isoformat(), "last_seen": today.isoformat(), "product": _product_label(product)})
         return _trial_decision(TRIAL_DAYS - 1, product)
     if seen is not None and today < seen:
         raise LicenseError(
@@ -427,12 +447,12 @@ def evaluate(product: str) -> Decision:
             "Pasang lisensi untuk melanjutkan."
         )
     left = TRIAL_DAYS - 1 - (today - first).days
-    _write_state({"first_run": first.isoformat(), "last_seen": max(today, seen or today).isoformat(), "product": product})
+    _write_state({"first_run": first.isoformat(), "last_seen": max(today, seen or today).isoformat(), "product": _product_label(product)})
     if left < 0:
         raise LicenseError(
             f"uji coba {TRIAL_DAYS} hari berakhir pada "
             f"{(first + timedelta(days=TRIAL_DAYS - 1)).isoformat()}. "
-            f"{product} ini berbayar. " + activate_hint_for(product)
+            f"{_product_label(product)} ini berbayar. " + activate_hint_for(product)
         )
     return _trial_decision(left, product)
 
@@ -446,7 +466,7 @@ def _as_date(text: object) -> date | None:
         return None
 
 
-def enforce(product: str, command: str | None = None, *, exempt: frozenset[str] = frozenset()) -> Decision:
+def enforce(product: ProductSpec, command: str | None = None, *, exempt: frozenset[str] = frozenset()) -> Decision:
     """Gate a run. `exempt` names subcommands that must always work (help, license)."""
     if command in exempt:
         return Decision("license", "tidak perlu lisensi", "", None, None, None,
@@ -477,7 +497,7 @@ def add_license_parser(sub, *, product: str, blurb: str = ""):
     return parser
 
 
-def run_license_command(args, product: str | None = None) -> int:
+def run_license_command(args, product: ProductSpec | None = None) -> int:
     """Handle the `license` subcommand. Returns a process exit code."""
     product = product or getattr(args, "product", None) or "*"
     action = getattr(args, "license_action", None) or "status"
@@ -531,12 +551,12 @@ def _read_key_argument(value: str) -> str:
     return value.strip()
 
 
-def status(product: str) -> dict:
+def status(product: ProductSpec) -> dict:
     today = date.today()
     state = _read_state()
     first = _as_date(state.get("first_run"))
     out = {
-        "product": product,
+        "product": _product_label(product),
         "public_key": (PUBLIC_KEY_HEX[:16] + "...") if PUBLIC_KEY_HEX else "(belum ditanam)",
         "trial_days": TRIAL_DAYS,
         "first_run": first.isoformat() if first else None,

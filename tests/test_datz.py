@@ -75,6 +75,58 @@ class OptionValidationTests(unittest.TestCase):
         self.assertEqual(opts.rate, 50.0)
 
 
+class TargetValidationTests(unittest.TestCase):
+    def _util(self, normalize):
+        util = mock.Mock()
+        util.ScopeError = type("ScopeError", (ValueError,), {})
+        util.normalize_target.side_effect = normalize
+        return util
+
+    def test_engine_reason_is_surfaced(self):
+        def reject(value):
+            raise ValueError(f"refusing to scan {value!r}: not a registrable domain")
+        util = self._util(reject)
+        util.normalize_target.side_effect = util.ScopeError(
+            "refusing to scan 'my.id': not a registrable domain")
+        with mock.patch.object(datz, "load_engine_module", return_value=util):
+            with self.assertRaises(ValueError) as ctx:
+                datz.validate_target(Path("webwarden.pyz"), "my.id")
+        self.assertIn("registrable domain", str(ctx.exception))
+
+    def test_valid_target_is_normalized(self):
+        util = self._util(lambda value: "example.com")
+        with mock.patch.object(datz, "load_engine_module", return_value=util):
+            self.assertEqual(
+                datz.validate_target(Path("webwarden.pyz"), "Example.com."),
+                "example.com")
+
+    def test_missing_engine_module_passes_through(self):
+        with mock.patch.object(datz, "load_engine_module", return_value=None):
+            self.assertEqual(
+                datz.validate_target(Path("webwarden.pyz"), "example.com"),
+                "example.com")
+
+    def test_pump_surfaces_engine_error_line(self):
+        app = build_app()
+        run = datz.RunState(argv=[], outdir=Path("."), started=0.0)
+        proc = mock.Mock()
+        proc.stdout = iter(["[1/7] dns ...\n", "error: target is outside --scope\n"])
+        proc.wait.return_value = 2
+        app._pump(run, proc)
+        self.assertEqual(run.code, 2)
+        self.assertIn("target is outside --scope", run.error)
+        self.assertIn("kode 2", run.error)
+
+    def test_pump_falls_back_to_exit_code(self):
+        app = build_app()
+        run = datz.RunState(argv=[], outdir=Path("."), started=0.0)
+        proc = mock.Mock()
+        proc.stdout = iter(["some output\n"])
+        proc.wait.return_value = 1
+        app._pump(run, proc)
+        self.assertEqual(run.error, "engine keluar dengan kode 1")
+
+
 class ArgvTests(unittest.TestCase):
     def opts(self, **kwargs) -> datz.ScanOptions:
         base = dict(target="example.com", authorized=True)
@@ -786,7 +838,7 @@ class DiagnoseModeTests(unittest.TestCase):
         text = out.getvalue()
         self.assertIn(f"datz {datz.APP_VERSION}", text)
         self.assertIn("stdin: fd=", text)
-        if datz.PAYLOAD_B64 and (root / "webwarden.pyz").is_file():
+        if (root / "webwarden.pyz").is_file():
             self.assertIn("engine version webwarden", text)
         else:
             self.assertIn("engine error", text)
@@ -926,6 +978,29 @@ class DisclosureTests(unittest.TestCase):
         text = "\n".join(datz.chain_detail_lines(scan))
         self.assertIn("0 chain", text)
         self.assertIn("bahan scan: 1 headers, 1 xss", text)
+
+    def test_chain_flow_shows_numbered_steps_and_impact(self):
+        scan = {"recon": {"chains": {"enabled": True, "items": [{
+            "id": "x", "title": "T", "status": "partial", "severity": "medium",
+            "summary": "ringkasan uji", "impact": "dampak uji",
+            "links": [
+                {"role": "precondition", "title": "Cookie lemah",
+                 "status": "observed", "reproductions": 2, "host": "a.com"},
+                {"role": "exposure", "title": "Token plaintext",
+                 "status": "partial", "reproductions": 1, "host": "a.com"},
+            ],
+            "proof": ["curl -sS https://a.com/"],
+            "limitations": "tidak dieksekusi",
+        }]}}}
+        text = "\n".join(datz.chain_detail_lines(scan))
+        self.assertIn(
+            "langkah 1 [prasyarat/observed] Cookie lemah (2x reproduksi) @ a.com",
+            text)
+        self.assertIn(
+            "langkah 2 [paparan/partial] Token plaintext (1x reproduksi) @ a.com",
+            text)
+        self.assertIn("dampak bila dikonfirmasi: dampak uji", text)
+        self.assertIn("batas: tidak dieksekusi", text)
 
     def test_disclosure_draft_has_boundary_and_contact(self):
         with tempfile.TemporaryDirectory() as tmp:

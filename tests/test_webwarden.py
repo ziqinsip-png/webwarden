@@ -34,6 +34,7 @@ from webwarden.audit import (
 from webwarden.checks import (
     FILE_CHECKS,
     Checker,
+    _looks_like_not_found,
     _parse_expiry,
     waf_fingerprint,
 )
@@ -221,6 +222,37 @@ class SegmentCatchAllHandler(BaseHTTPRequestHandler):
             }).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+
+class Soft404Handler(BaseHTTPRequestHandler):
+    """Every path returns HTTP 200 with a per-path '404 Not Found' page.
+
+    The body varies enough that the similarity-based catch-all guard alone
+    would not suppress it; the explicit not-found title must.
+    """
+
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, *args):
+        pass
+
+    def do_HEAD(self):
+        self.do_GET()
+
+    def do_GET(self):
+        body = (
+            "<html><head><title>404 - Page Not Found</title></head><body>"
+            f"<h1>Page Not Found</h1><p>The requested URL {self.path} "
+            "was not found on this server.</p>"
+            f"<!-- {'padding ' * 200}{self.path} -->"
+            "</body></html>"
+        ).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         if self.command != "HEAD":
@@ -1003,6 +1035,64 @@ class SegmentCatchAllTests(unittest.TestCase):
         self.assertIn("Tomcat Manager", control.text)
 
 
+class Soft404Tests(unittest.TestCase):
+    """A 200 'not found' page must not be reported as an exposure."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), Soft404Handler)
+        cls.server.daemon_threads = True
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+        cls.port = cls.server.server_address[1]
+        cls.base = f"http://127.0.0.1:{cls.port}/"
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+        cls.thread.join(timeout=5)
+
+    def run_checker(self) -> set[str]:
+        client = HttpClient(scopes=["127.0.0.1"], rate=100.0, timeout=5.0,
+                            budget=Budget(1000), auth_host="127.0.0.1")
+        result = client.get(self.base)
+        probe = Probe(host="127.0.0.1", url=result.final_url,
+                      status=result.status, result=result)
+        return {finding.title for finding in Checker(client, [probe], []).run()}
+
+    def test_soft_404_is_not_an_exposure(self):
+        titles = self.run_checker()
+        for title in (
+            "Admin interface reachable",
+            "WordPress admin reachable",
+            "phpMyAdmin reachable",
+            "Directory listing enabled",
+            "Exposed .env file",
+        ):
+            self.assertNotIn(title, titles)
+
+    def test_not_found_detector_positive(self):
+        for body in (
+            b"<html><head><title>404 - Page Not Found</title></head></html>",
+            b"<html><head><title>Error 404</title></head><body>x</body></html>",
+            b"<html><body><h1>Page Not Found</h1></body></html>",
+            b"<html><head><title>Halaman Tidak Ditemukan</title></head></html>",
+            b"<html><body><h1>404</h1></body></html>",
+        ):
+            self.assertTrue(_looks_like_not_found(body), body)
+
+    def test_not_found_detector_negative(self):
+        for body in (
+            b"<html><head><title>Admin Login</title></head><body>404 users</body></html>",
+            b"<html><head><title>Dashboard</title></head><body>error 404 logged</body></html>",
+            b"APP_KEY=base64:secret\nDB_PASSWORD=hunter2\n",
+            b"<html><head><title>Found Objects Gallery</title></head></html>",
+            b"ref: refs/heads/main\n",
+        ):
+            self.assertFalse(_looks_like_not_found(body), body)
+
+
 class BypassTests(ServerHarness):
     handler = BypassHandler
 
@@ -1184,6 +1274,41 @@ class ReportTests(unittest.TestCase):
         self.assertNotIn("UNION SELECT", markdown)
         self.assertNotIn("## Skenario attacker (simulasi)",
                          render_markdown(result, "en"))
+
+    def test_chain_flow_rendered_with_numbered_steps(self):
+        item = {
+            "id": "session-plaintext-example.com",
+            "title": "Session hijacking via cleartext session token",
+            "status": "partial", "severity": "medium",
+            "summary": "cookie over http", "impact": "on-path read",
+            "links": [
+                {"role": "precondition", "title": "Cookie missing attributes",
+                 "host": "example.com", "status": "observed",
+                 "reproductions": 2, "evidence": "set-cookie observed"},
+                {"role": "exposure", "title": "Session token over HTTP",
+                 "host": "example.com", "status": "partial",
+                 "reproductions": 1, "evidence": "token observed"},
+            ],
+            "proof": ["curl -sS -D - -o /dev/null http://example.com/"],
+            "limitations": "no interception performed",
+        }
+        result = ScanResult(
+            target="example.com", scopes=["example.com"], version="test",
+            started_at="2026-01-01T00:00:00Z",
+            recon={"chains": {"enabled": True, "total": 1, "items": [item]}},
+        )
+        markdown = render_markdown(result, "id")
+        self.assertIn("**Alur exploit:**", markdown)
+        self.assertIn("1. [prasyarat] Cookie missing attributes (observed)",
+                      markdown)
+        self.assertIn("2. [paparan] Session token over HTTP (partial)",
+                      markdown)
+        self.assertIn("**Dampak bila dikonfirmasi:** on-path read", markdown)
+        self.assertIn("**Langkah bukti read-only**", markdown)
+        self.assertIn("**Batas chain:** no interception performed", markdown)
+        english = render_markdown(result, "en")
+        self.assertIn("**Exploit flow:**", english)
+        self.assertIn("**Impact if confirmed:**", english)
 
     def test_indonesian_html_report(self):
         result = ScanResult(

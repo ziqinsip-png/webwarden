@@ -326,6 +326,16 @@ def _readiness_lines(findings: list[Finding], recon: dict,
     return lines
 
 
+_CHAIN_ROLE_ID = {
+    "precondition": "prasyarat",
+    "exposure": "paparan",
+    "injection": "injeksi",
+    "execution": "eksekusi",
+    "impact": "dampak",
+    "excluded": "dikecualikan",
+}
+
+
 def _chain_lines(recon: dict, lang: str = "en") -> list[str]:
     tr = _lang(lang)
     chains = recon.get("chains") or {}
@@ -374,9 +384,20 @@ def _chain_lines(recon: dict, lang: str = "en") -> list[str]:
             "",
         ])
         if item.get("impact"):
-            lines.extend([f"**Impact if confirmed:** {item['impact']}", ""])
+            impact_label = ("Dampak bila dikonfirmasi" if lang == "id"
+                            else "Impact if confirmed")
+            lines.extend([f"**{impact_label}:** {item['impact']}", ""])
         links = item.get("links") or []
         if links:
+            flow_parts = []
+            for position, link in enumerate(links, start=1):
+                role = _CHAIN_ROLE_ID.get(str(link.get("role")),
+                                          str(link.get("role") or ""))
+                flow_parts.append(
+                    f"{position}. [{role}] {link.get('title')} "
+                    f"({link.get('status')})")
+            flow_label = "Alur exploit" if lang == "id" else "Exploit flow"
+            lines.extend([f"**{flow_label}:** " + " → ".join(flow_parts), ""])
             lines.extend([
                 "| # | Link | Host | Role | Status | Reproduced | Evidence |",
                 "| --- | --- | --- | --- | --- | :-: | --- |",
@@ -392,13 +413,16 @@ def _chain_lines(recon: dict, lang: str = "en") -> list[str]:
             lines.append("")
         proof = item.get("proof") or []
         if proof:
-            lines.extend(["**Read-only proof steps**", ""])
+            proof_label = ("Langkah bukti read-only" if lang == "id"
+                           else "Read-only proof steps")
+            lines.extend([f"**{proof_label}**", ""])
             for step in proof:
                 lines.append(f"- {step}")
             lines.append("")
         limitations = item.get("limitations") or ""
         if limitations:
-            lines.extend([f"**Chain limitations:** {limitations}", ""])
+            limit_label = ("Batas chain" if lang == "id" else "Chain limitations")
+            lines.extend([f"**{limit_label}:** {limitations}", ""])
     return lines
 
 
