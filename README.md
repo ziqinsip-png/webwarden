@@ -40,9 +40,11 @@ drift bundle build, dangling CNAME, kandidat CVE dari versi, sampai probe injeks
 (SQLi / SSTI / XSS / LFI / SSRF / CRLF). Semua permintaan adalah **GET/HEAD**, ada budget request
 dan rate limit per host, dan setiap temuan punya **bukti verbatim** di folder `evidence/`.
 
-`datz.py` adalah front-end TUI-nya: satu file, tanpa dependensi, boot animation, panel
-konfigurasi, tombol modul, console streaming, tab Temuan/Chains/Recon/Files, dan tombol
-pilihan folder output (Kali `~/.datz/runs` atau folder Downloads laptop).
+`datz.py` adalah front-end TUI-nya: satu file, tanpa dependensi, boot card animasi, tema
+midnight-blue (kartu konfigurasi bertingkat, meter berbobot, rail tab dengan VU meter,
+pill status dan keycaps), panel konfigurasi, tombol modul, console streaming, tab
+Temuan/Chains/Recon/Files, dan tombol pilihan folder output (Kali `~/.datz/runs` atau
+folder Downloads laptop).
 
 **Yang membedakan dari scanner biasa:**
 

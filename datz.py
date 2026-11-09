@@ -34,6 +34,7 @@ import hashlib
 import importlib
 import json
 import locale
+import math
 import os
 import platform
 import re
@@ -50,7 +51,7 @@ import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
 
-APP_VERSION = "2.9.0"
+APP_VERSION = "2.10.0"
 ENGINE_NAME = "webwarden"
 HOME = Path(os.environ.get("DATZ_HOME") or (Path.home() / ".datz"))
 RUNTIME_DIR = HOME / "runtime"
@@ -589,15 +590,23 @@ RESET = "\x1b[0m"
 CLEAR = "\x1b[2J"
 HOME_CURSOR = "\x1b[H"
 
-# 256-colour palette: midnight-blue console
-BG = 233
-PANEL = 235
-PANEL2 = 237
-TEXT = 153
-DIM = 111
-FAINT = 242
-ACCENT = 39
-ACCENT2 = 51
+# 256-colour palette: midnight-blue console.
+# Four surfaces stack from canvas to chrome, so panels read as cards rather
+# than one flat field: BG < PANEL < PANEL2 < TEXT.
+BG = 233          # canvas
+PANEL = 235       # card surface
+TRACK = 236       # input wells
+PANEL2 = 237      # chrome: header, tab rail, status bar
+EDGE = 238        # hairline rules
+TEXT = 153        # primary copy
+DIM = 111         # labels
+FAINT = 242       # tertiary
+ACCENT = 39       # azure
+ACCENT2 = 51      # cyan
+DEEP = 33
+DEEP2 = 27
+NIGHT = 24
+FOCUS_BG = 17
 GOOD = 42
 WARN = 214
 BAD = 203
@@ -606,6 +615,9 @@ MED = 215
 LOW = 39
 INFO = 244
 INK = 16
+GRAD = (45, 39, 33, 27)
+SEV_FG = {"critical": 209, "high": 203, "medium": 215, "low": 45,
+          "info": 244}
 
 STYLE_DEFAULT = (TEXT, PANEL, False, False, False)
 
@@ -712,6 +724,95 @@ def sev_style(sev: str):
     bg = {"critical": CRIT, "high": BAD, "medium": MED,
           "low": LOW, "info": INFO}.get(sev, PANEL2)
     return (fg, bg, True, False, False)
+
+
+# --------------------------------------------------------------------------
+# design primitives: gradient type, hairlines, pills, keycaps, meters
+# --------------------------------------------------------------------------
+
+def _stop(stops, index: int, length: int):
+    return stops[min(len(stops) - 1,
+                     (index * len(stops)) // max(1, length))]
+
+
+def gradient(scr: "Screen", x: int, y: int, text: str, stops=GRAD,
+             bg: int = PANEL2, bold: bool = True) -> None:
+    """Per-cell colour ramp: one continuous gradient instead of flat colour."""
+    for i, ch in enumerate(text):
+        scr.put(x + i, y, ch, (_stop(stops, i, len(text)), bg, bold, False,
+                               False))
+
+
+def hairline(scr: "Screen", x: int, y: int, w: int, bg: int = PANEL,
+             stops=(EDGE, PANEL2)) -> None:
+    for i in range(max(0, w)):
+        scr.put(x + i, y, "─", (_stop(stops, i, w), bg, False, False, False))
+
+
+def pill(scr: "Screen", x: int, y: int, text: str, fg: int, bg: int,
+         bold: bool = True) -> int:
+    scr.put(x, y, f" {text} ", (fg, bg, bold, False, False))
+    return len(text) + 2
+
+
+def keycap(scr: "Screen", x: int, y: int, key: str, label: str = "",
+           bg: int = BG, accent: bool = False) -> int:
+    """Inverse key badge plus a dim caption; returns the cells consumed."""
+    scr.put(x, y, f" {key} ", (INK, ACCENT if accent else PANEL2, True,
+                               False, False))
+    used = len(key) + 2
+    if label:
+        scr.put(x + used, y, " " + label,
+                (TEXT if accent else DIM, bg, False, False, False))
+        used += len(label) + 1
+    return used
+
+
+def meter(scr: "Screen", x: int, y: int, value, width: int, colour: int,
+          bg: int = PANEL, track: int = EDGE) -> None:
+    """Heavy-bar meter: solid ━ for the filled span, hairline ─ behind."""
+    width = max(1, int(width))
+    if value is None:
+        scr.put(x, y, "─" * width, (track, bg, False, False, False))
+        return
+    filled = max(0, min(width, int(round(width * float(value) / 100.0))))
+    if filled:
+        scr.put(x, y, "━" * filled, (colour, bg, False, False, False))
+    if filled < width:
+        scr.put(x + filled, y, "─" * (width - filled),
+                (track, bg, False, False, False))
+
+
+def section(scr: "Screen", x: int, y: int, w: int, label: str,
+            hue: int = ACCENT, bg: int = PANEL, note: str = "") -> None:
+    """`▎ LABEL ────── note` group header used across every panel."""
+    scr.put(x, y, "▎", (hue, bg, True, False, False))
+    scr.put(x + 2, y, label, (DIM, bg, True, False, False))
+    used = 2 + len(label) + 1
+    tail = len(note) + 1 if note else 0
+    rule_w = w - used - tail
+    if rule_w > 0:
+        hairline(scr, x + used, y, rule_w, bg, (EDGE, bg))
+    if note:
+        scr.put(x + w - len(note), y, note, (FAINT, bg, False, False, False))
+
+
+def equalizer(scr: "Screen", x: int, y: int, width: int, now: float,
+              phase: int = 0, bg: int = PANEL2) -> None:
+    """Animated VU bars for the tab rail; calm when idle, fast when scanning."""
+    glyphs = "▁▂▃▄▅▆▇█"
+    live = bool(phase)
+    speed = 7.0 if live else 1.1
+    for i in range(max(0, width)):
+        wave = (math.sin(now * speed + i * 0.9 + phase) + 1.0) / 2.0
+        level = min(len(glyphs) - 1, int(wave * (len(glyphs) if live else 4)))
+        colour = _stop(GRAD if live else (DEEP, DEEP2), i, width)
+        scr.put(x + i, y, glyphs[level], (colour, bg, False, False, False))
+
+
+def divider(scr: "Screen", x: int, y: int, w: int, bg: int = PANEL) -> None:
+    scr.put(x, y, "╌" * max(0, w), (EDGE, bg, False, False, False))
+
 
 
 # --------------------------------------------------------------------------
@@ -1827,8 +1928,16 @@ dengan --no-weather atau DATZ_NO_WEATHER=1.
 ANIMASI
 Boot singkat (~1 detik) saat masuk; tombol apa saja
 melewatinya (--no-boot untuk langsung masuk). Di dalam UI:
-stream matrix di header, scanline berjalan di tab, kursor
-berkedip, spinner scan, dan sparkline CPU.
+grafik VU berjalan di rail tab, meter risiko dan severity,
+kursor berkedip, spinner scan, dan sparkline CPU.
+
+UI
+Tema biru malam: header gradien dengan tile DATZ, kartu
+KONFIGURASI di kiri, rail tab + chip status di kanan, bar
+keycap di bawah, dan bar sistem (CPU/RAM/baterai/cuaca/
+uptime) di baris terakhir. Semua warna 256-colour; tetap
+terbaca di terminal 256 warna (xterm, gnome-terminal,
+Windows Terminal, conhost).
 
 KALAU DASHBOARD LANGSUNG KELUAR
 datz.py menulis alasan keluar ke stderr dan mencatat log di
@@ -1919,60 +2028,54 @@ def draw(app: App, width: int, height: int, now: float | None = None) -> Screen:
     return scr
 
 
-MATRIX_GLYPHS = "0101.:+=#"
-
-
-def matrix_stream(now: float, width: int, phase: int = 0) -> str:
-    if width <= 0:
-        return ""
-    seed = ((int(now * 2) + phase * 11) * 2654435761) & 0xFFFFFFFF
-    out: list[str] = []
-    for _ in range(width):
-        seed = (seed * 1103515245 + 12345) & 0x7FFFFFFF
-        out.append(MATRIX_GLYPHS[(seed >> 13) % len(MATRIX_GLYPHS)])
-    return "".join(out)
-
-
 def draw_header(scr: Screen, app: App, width: int, now: float) -> None:
-    scr.fill(0, 0, width, 1, (TEXT, BG, False, False, False))
-    brand = " ▌ DATZ "
-    scr.put(0, 0, brand, (INK, ACCENT, True, False, False))
-    pos = len(brand)
-    if width >= 90:
-        sub = " › web security console "
-        scr.put(pos, 0, sub, (DIM, BG, False, False, False))
-        pos += len(sub)
+    """Top chrome: gradient wordmark tile, breadcrumb, status pill, clock."""
+    scr.fill(0, 0, width, 1, (TEXT, PANEL2, False, False, False))
+    tile = " DATZ "
+    for i, ch in enumerate(tile):
+        scr.put(i, 0, ch, (INK, _stop(GRAD, i, len(tile)), True, False, False))
+    pos = len(tile)
+    if width >= 76:
+        scr.put(pos, 0, " ❯ ", (ACCENT2, PANEL2, True, False, False))
+        pos += 3
+        crumb = dict(TABS).get(app.tab, app.tab)
+        scr.put(pos, 0, crumb, (ACCENT, PANEL2, True, False, False))
+        pos += len(crumb)
+        if width >= 104:
+            tail = "  ·  web security console"
+            scr.put(pos, 0, tail, (FAINT, PANEL2, False, False, False))
+            pos += len(tail)
+
     clock = time.strftime("%H:%M:%S", time.localtime(now))
-    badge = f"{app.license_badge} · " if app.license_badge else ""
-    if width >= 132:
-        date = time.strftime("%Y-%m-%d", time.localtime(now))
-        right = f"[ {badge}v{app.engine_version} · {date} {clock} ] "
-    elif width >= 104:
-        right = f"[ {badge}v{app.engine_version} · {clock} ] "
-    else:
-        right = f"[ {badge}{clock} ] "
-    right_x = max(0, width - len(right))
-    scr.put(right_x, 0, right, (ACCENT2, BG, False, False, False))
     if app.running:
         status = f"{'◐◓◑◒'[app.spinner % 4]} SCANNING"
-        colour = WARN
+        chip = (INK, WARN, True)
     elif app.demo:
-        status, colour = "● DEMO", ACCENT2
+        status, chip = "● DEMO", (INK, ACCENT2, True)
     elif app.result:
-        status, colour = "● SELESAI", GOOD
+        status, chip = "● SELESAI", (INK, GOOD, True)
     else:
-        status, colour = "○ IDLE", 244
-    tag = f"[ {status} ]"
-    centre = max(pos + 1, (width - len(tag)) // 2)
-    if centre + len(tag) >= right_x:
-        centre = pos + 1
-    if centre + len(tag) < right_x:
-        scr.put(centre, 0, tag, (INK, colour, True, False, False))
-        gap_x = centre + len(tag) + 1
-        gap_w = right_x - gap_x - 2
-        if gap_w >= 10:
-            scr.put(gap_x, 0, matrix_stream(now, gap_w, app.spinner),
-                    (22, BG, False, False, False))
+        status, chip = "○ READY", (ACCENT2, DEEP2, True)
+    chips: list[tuple[str, int, int, bool]] = [
+        (f" {status} ", *chip),
+        (f" {clock} ", ACCENT2, PANEL2, True),
+    ]
+    if app.license_badge:
+        chips.append((f" {app.license_badge} ", ACCENT, DEEP2, True))
+    if width >= 100 and app.engine_version:
+        label = app.engine_version.split()[-1]
+        chips.append((f" v{label} ", FAINT, PANEL2, False))
+    need = sum(len(text) for text, *_ in chips) + len(chips) - 1
+    right_x = width - need
+    if right_x > pos + 4:
+        hairline(scr, pos + 1, 0, right_x - pos - 2, PANEL2, (NIGHT, PANEL2))
+        cursor = right_x
+        for text, fg, bg, bold in chips:
+            scr.put(cursor, 0, text, (fg, bg, bold, False, False))
+            cursor += len(text) + 1
+    elif right_x > pos:
+        text, fg, bg, bold = chips[0]
+        scr.put(right_x, 0, text, (fg, bg, bold, False, False))
 
 
 def _bar_colour(pct) -> int:
@@ -1992,11 +2095,11 @@ def system_segments(app: App) -> list[list[tuple[str, tuple]]]:
     segments: list[list[tuple[str, tuple]]] = []
 
     if monitor.cpu is None:
-        segments.append([("CPU ", label), ("n/a", faint)])
+        segments.append([("CPU", label), (" n/a", faint)])
     else:
         colour = _bar_colour(monitor.cpu)
-        parts = [("CPU ", label),
-                 (f"{monitor.cpu:3.0f}% ", (colour, PANEL2, True, False, False)),
+        parts = [("CPU", label),
+                 (f" {monitor.cpu:3.0f}% ", (colour, PANEL2, True, False, False)),
                  (pct_bar(monitor.cpu, 4), (colour, PANEL2, False, False, False))]
         spark = sparkline(monitor.history, 10)
         if spark:
@@ -2004,11 +2107,11 @@ def system_segments(app: App) -> list[list[tuple[str, tuple]]]:
         segments.append(parts)
 
     if monitor.ram is None:
-        segments.append([("RAM ", label), ("n/a", faint)])
+        segments.append([("RAM", label), (" n/a", faint)])
     else:
         colour = _bar_colour(monitor.ram)
-        parts = [("RAM ", label),
-                 (f"{monitor.ram:3.0f}% ", (colour, PANEL2, True, False, False)),
+        parts = [("RAM", label),
+                 (f" {monitor.ram:3.0f}% ", (colour, PANEL2, True, False, False)),
                  (pct_bar(monitor.ram, 4), (colour, PANEL2, False, False, False))]
         if monitor.ram_used_gb is not None and monitor.ram_total_gb:
             parts.extend([(" ", text),
@@ -2017,12 +2120,12 @@ def system_segments(app: App) -> list[list[tuple[str, tuple]]]:
         segments.append(parts)
 
     if monitor.battery is None:
-        segments.append([("BAT ", label), ("n/a", faint)])
+        segments.append([("BAT", label), (" n/a", faint)])
     else:
         colour = _bar_colour(monitor.battery)
         suffix = "+" if monitor.plugged else ""
-        segments.append([("BAT ", label),
-                         (f"{monitor.battery:3.0f}%{suffix}",
+        segments.append([("BAT", label),
+                         (f" {monitor.battery:3.0f}%{suffix}",
                           (colour, PANEL2, True, False, False)),
                          (" ", text),
                          (pct_bar(monitor.battery, 4),
@@ -2032,37 +2135,33 @@ def system_segments(app: App) -> list[list[tuple[str, tuple]]]:
         cond = monitor.weather_cond or monitor.weather
         temperature = monitor.weather_temp or ""
         chunk = " ".join(part for part in (weather_icon(cond), temperature) if part)
-        segments.append([("WX ", label),
-                         (chunk or monitor.weather[:20],
+        segments.append([("WX", label),
+                         (" " + (chunk or monitor.weather[:20]),
                           (ACCENT2, PANEL2, False, False, False))])
     else:
-        segments.append([("WX ", label), ("n/a", faint)])
+        segments.append([("WX", label), (" n/a", faint)])
 
     if monitor.uptime is not None:
-        segments.append([("UP ", label),
-                         (format_uptime(monitor.uptime), text)])
+        segments.append([("UP", label),
+                         (" " + format_uptime(monitor.uptime), text)])
     return segments
 
 
 def draw_system_bar(scr: Screen, app: App, width: int, height: int,
                     now: float) -> None:
     y = height - 1
-    scr.put(0, y, " " * width, (TEXT, PANEL2, False, False, False))
-    badge = " root@datz:~# "
-    scr.put(0, y, badge, (INK, ACCENT2, True, False, False))
+    scr.fill(0, y, width, 1, (TEXT, PANEL2, False, False, False))
+    prompt = " ❯ root@datz "
+    scr.put(0, y, prompt, (ACCENT2, DEEP2, True, False, False))
     clock = time.strftime("%H:%M:%S", time.localtime(now))
-    if width >= 124:
-        date = time.strftime("%Y-%m-%d", time.localtime(now))
-        right = f" {date} · {clock} "
-    else:
-        right = f" {clock} "
+    right = f" {clock} "
     right_x = width - len(right)
-    if right_x > len(badge) + 1:
-        scr.put(right_x, y, right, (ACCENT, PANEL2, True, False, False))
-        limit = right_x - 1
+    if right_x > len(prompt) + 1:
+        scr.put(right_x, y, right, (INK, ACCENT, True, False, False))
+        limit = right_x - 2
     else:
-        limit = width - 1
-    x = len(badge)
+        limit = width
+    x = len(prompt) + 1
     try:
         segments = system_segments(app)
     except Exception:
@@ -2073,7 +2172,7 @@ def draw_system_bar(scr: Screen, app: App, width: int, height: int,
         if x + need > limit:
             continue
         if not first:
-            scr.put(x, y, " │ ", (238, PANEL2, False, False, False))
+            scr.put(x, y, " · ", (EDGE, PANEL2, False, False, False))
             x += 3
         for text, style in parts:
             scr.put(x, y, text, style)
@@ -2081,7 +2180,16 @@ def draw_system_bar(scr: Screen, app: App, width: int, height: int,
         first = False
 
 
+FOOTER_HINTS = (
+    ("F1", "Bantuan"), ("F5", "Mulai"), ("F6", "Stop"),
+    ("F7", "Doctor"), ("F2", "Lanjut"), ("F4", "Output"),
+    ("o", "Report"), ("q", "Keluar"),
+)
+
+
 def draw_footer(scr: Screen, app: App, width: int, height: int, now: float) -> None:
+    y = height - 2
+    scr.fill(0, y, width, 1, (TEXT, BG, False, False, False))
     msg = ""
     error = False
     if app.message:
@@ -2091,46 +2199,76 @@ def draw_footer(scr: Screen, app: App, width: int, height: int, now: float) -> N
         else:
             app.message = None
     if msg:
-        style = (INK, BAD, True, False, False) if error else (INK, ACCENT, False, False, False)
-        scr.put(0, height - 2, " " * width, style)
-        scr.put(1, height - 2, clip(msg, width - 2), style)
+        band = 52 if error else DEEP2
+        scr.fill(0, y, width, 1, (TEXT, band, False, False, False))
+        scr.put(1, y, "✕" if error else "✓",
+                (BAD if error else ACCENT2, band, True, False, False))
+        scr.put(3, y, clip(msg, width - 4),
+                (231 if error else TEXT, band, False, False, False))
+    elif app.running:
+        prog = app.progress()
+        elapsed = int(now - app.started_at)
+        scr.put(1, y, "◐", (WARN, BG, True, False, False))
+        head = f" scan berjalan {elapsed}s "
+        scr.put(3, y, head, (WARN, BG, True, False, False))
+        x = 3 + len(head)
+        if prog is not None and x + 16 < width:
+            meter(scr, x, y, int(prog * 100), 12, WARN, BG, EDGE)
+            pct = f" {int(prog * 100):>3}%"
+            scr.put(x + 12, y, pct, (WARN, BG, True, False, False))
+            x += 12 + len(pct)
+        x += 2
+        for key, label in (("F6", "stop"), ("q", "keluar")):
+            need = len(key) + 3 + len(label) + 2
+            if x + need > width - 1:
+                break
+            x += keycap(scr, x, y, key, label, BG) + 2
     else:
-        hint = ("[F1] bantuan  [F5] run  [F6] stop  [F7] doctor  [F8] cmd  "
-                "[F2] adv  [F4] out  [o] report  [q] quit")
-        if app.running:
-            prog = app.progress()
-            elapsed = int(now - app.started_at)
-            hint = (f">> scan berjalan {elapsed}s"
-                    + (f" · {int(prog * 100)}%" if prog is not None else "")
-                    + " · [F6] stop · q keluar")
-        scr.put(1, height - 2, clip(hint, width - 2),
-                (DIM, BG, False, False, False))
+        x = 1
+        for key, label in FOOTER_HINTS:
+            need = len(key) + 3 + len(label) + 2
+            if x + need > width - 1:
+                break
+            x += keycap(scr, x, y, key, label, BG,
+                        accent=(key == "F5")) + 2
     draw_system_bar(scr, app, width, height, now)
 
 
 def draw_left(scr: Screen, app: App, x: int, y: int, w: int, h: int) -> None:
     focused = app.focus
-    scr.box(x, y, w, h, (DIM, PANEL, False, False, False),
-            title="// KONFIGURASI",
+    scr.box(x, y, w, h, (EDGE, PANEL, False, False, False),
+            title="⌁ KONFIGURASI",
             title_style=(ACCENT, PANEL, True, False, False))
     inner_x = x + 2
     inner_w = w - 4
     row = y + 1
 
-    def label(text: str) -> None:
+    if w >= 38:
+        adv = " F2 ▸ "
+        ax = x + w - len(adv) - 2
+        adv_focus = focused == "advanced"
+        scr.put(ax, y, adv,
+                (INK if adv_focus else ACCENT2,
+                 ACCENT if adv_focus else DEEP2, True, False, False))
+        scr.region("advanced", ax, y, len(adv), 1)
+
+    def label(text: str, note: str = "") -> None:
         nonlocal row
-        scr.put(inner_x, row, "▸ " + text, (DIM, PANEL, True, False, False))
+        section(scr, inner_x, row, inner_w, text, ACCENT, PANEL, note)
         row += 1
 
-    def input_line(name: str, value: str, placeholder: str) -> None:
+    def field(name: str, glyph: str, value: str, placeholder: str) -> None:
         nonlocal row
         is_focus = focused == name
         editing = app.editing and app.editing[0] == name
-        bg = 236 if is_focus else 234
-        border = ACCENT if is_focus else 240
-        scr.put(inner_x, row, "▏", (border, PANEL, False, False, False))
+        bg = FOCUS_BG if is_focus else TRACK
+        scr.put(inner_x, row, "▏",
+                (ACCENT if is_focus else EDGE, PANEL, False, False, False))
         scr.fill(inner_x + 1, row, inner_w - 1, 1, (TEXT, bg, False, False, False))
+        scr.put(inner_x + 2, row, glyph,
+                (ACCENT2 if is_focus else FAINT, bg, True, False, False))
         shown = value
+        style = (TEXT, bg, False, False, False)
         if editing:
             buf = app.editing[1]
             shown = "".join(buf)
@@ -2138,46 +2276,57 @@ def draw_left(scr: Screen, app: App, x: int, y: int, w: int, h: int) -> None:
             shown = shown[:pos] + "▌" + shown[pos:]
         elif not shown:
             shown = placeholder
+            style = (FAINT, bg, False, True, False)
         if not editing and is_focus and int(time.time() * 2) % 2 == 0:
-            shown = shown + "▌"
-        scr.put(inner_x + 2, row, clip(shown, inner_w - 3),
-                (TEXT if value or editing else FAINT, bg, False, False, False))
+            shown += "▌"
+        avail = inner_w - 4
+        if is_focus and not editing and avail > 10:
+            hint = " ⏎ "
+            hint_x = inner_x + inner_w - len(hint) - 1
+            scr.put(hint_x, row, hint, (ACCENT2, DEEP2, True, False, False))
+            avail = hint_x - (inner_x + 4) - 1
+        scr.put(inner_x + 4, row, clip(shown, avail), style)
         scr.region(name, inner_x, row, inner_w, 1)
         row += 1
 
-    label("TARGET DOMAIN")
-    input_line("target", app.target, "example.com")
-    label("SCOPE TAMBAHAN")
-    input_line("scopes", app.scopes, "*.example.com, api.example.net")
+    label("TARGET", "wajib")
+    field("target", "›", app.target, "example.com")
+    label("SCOPE", "opsional")
+    field("scopes", "＋", app.scopes, "*.example.com, api.example.net")
     row += 1
 
     auth_focus = focused == "auth"
-    bg = 236 if auth_focus else (17 if app.authorized else 52)
-    mark = "✓" if app.authorized else " "
-    text = f"[{mark}] Saya pemilik / punya izin tertulis"
-    fg = 231 if not app.authorized else ACCENT
+    checked = app.authorized
+    if checked:
+        bg = 28 if auth_focus else 22
+        fg = 231
+    else:
+        bg = 88 if auth_focus else 52
+        fg = 231
     scr.fill(inner_x, row, inner_w, 1, (fg, bg, False, False, False))
-    scr.put(inner_x + 1, row, clip(text, inner_w - 2),
-            (fg, bg, not app.authorized, False, False))
+    scr.put(inner_x + 1, row, "[✓]" if checked else "[ ]",
+            (GOOD if checked else WARN, bg, True, False, False))
+    scr.put(inner_x + 5, row, clip("Pemilik / izin tertulis", inner_w - 6),
+            (fg, bg, not checked, False, False))
     scr.region("auth", inner_x, row, inner_w, 1)
     row += 2
 
     prefix = "OUT "
-    seg_w = max(8, (inner_w - len(prefix) - 1) // 2)
     scr.put(inner_x, row, prefix, (DIM, PANEL, True, False, False))
+    seg_w = max(8, (inner_w - len(prefix) - 1) // 2)
     bx = inner_x + len(prefix)
+    scr.fill(bx, row, inner_w - len(prefix), 1, (DIM, PANEL2, False, False, False))
     for key, name, _hint in OUTPUT_CHOICES:
         active = app.dest == key
         focus_here = focused == "output"
-        text = ("● " if active else "○ ") + name
-        text = clip(text, seg_w - 1)
+        text = clip(("● " if active else "○ ") + name, seg_w - 1)
         pad = seg_w - len(text) - 1
         if active:
             fg, bg = INK, ACCENT
         elif focus_here:
-            fg, bg = ACCENT, 17
+            fg, bg = ACCENT2, FOCUS_BG
         else:
-            fg, bg = DIM, 236
+            fg, bg = DIM, PANEL2
         scr.put(bx, row, " " + text + " " * pad + " ",
                 (fg, bg, active, False, False))
         scr.region(f"out:{key}", bx, row, seg_w, 1)
@@ -2186,33 +2335,28 @@ def draw_left(scr: Screen, app: App, x: int, y: int, w: int, h: int) -> None:
 
     label("PRESET")
     btn_w = max(6, (inner_w - 3) // 4)
+    scr.fill(inner_x, row, min(inner_w, btn_w * 4 + 3), 1,
+             (DIM, PANEL2, False, False, False))
     bx = inner_x
     for idx, key in enumerate(PRESET_ORDER):
         active = app.preset == key
         focus_here = focused == "presets" and app.preset_index == idx
-        fg = INK if active else TEXT
-        bg = ACCENT if active else 236
+        fg = INK if active else DIM
+        bg = ACCENT if active else PANEL2
         if focus_here:
-            fg, bg = (INK if active else ACCENT), (ACCENT if active else 17)
-        label = PRESETS[key]["label"]
-        if len(label) > btn_w - 1:
-            label = PRESET_SHORT[key]
-        text = clip(label, btn_w - 1)
+            fg, bg = (INK, ACCENT2) if active else (ACCENT2, FOCUS_BG)
+        text = PRESETS[key]["label"]
+        if len(text) > btn_w - 1:
+            text = PRESET_SHORT[key]
+        text = clip(text, btn_w - 1)
         pad = btn_w - len(text) - 1
         scr.put(bx, row, " " + text + " " * pad, (fg, bg, active, False, False))
         scr.region(f"preset:{key}", bx, row, btn_w, 1)
         bx += btn_w + 1
     row += 1
 
-    header = "// MODUL SCAN"
-    scr.put(inner_x, row, header, (DIM, PANEL, True, False, False))
-    adv_label = "[F2 lanjutan]"
-    scr.put(inner_x + inner_w - len(adv_label), row, adv_label,
-            ((ACCENT if focused == "advanced" else FAINT), PANEL, False, False, False))
-    scr.region("advanced", inner_x + inner_w - len(adv_label), row,
-               len(adv_label), 1)
-    row += 1
-
+    on = sum(1 for value in app.modules.values() if value)
+    label("MODUL", f"{on}/{len(MODULES)}")
     avail = h - (row - y) - 4
     col_w = (inner_w - 1) // 2
     per_col = 5 if avail >= 5 else max(1, avail)
@@ -2227,85 +2371,108 @@ def draw_left(scr: Screen, app: App, x: int, y: int, w: int, h: int) -> None:
             break
         checked = app.modules[key]
         focus_here = focused == "modules" and app.module_index == idx
-        bg = 236 if focus_here else PANEL
+        bg = PANEL2 if focus_here else PANEL
         fg = TEXT if checked else FAINT
         scr.put(mx, my, " " * (col_w - 1), (fg, bg, False, False, False))
-        box = "[x]" if checked else "[ ]"
-        scr.put(mx, my, box, (ACCENT if checked else FAINT, bg, True, False, False))
-        scr.put(mx + 4, my, clip(name, col_w - 5), (fg, bg, checked, False, False))
+        scr.put(mx, my, " " + ("✓" if checked else "·") + " ",
+                (ACCENT2 if checked else EDGE, bg, True, False, False))
+        scr.put(mx + 3, my, clip(name, col_w - 4), (fg, bg, checked, False, False))
         scr.region(f"mod:{key}", mx, my, col_w - 1, 1)
     row += per_col + 1
 
     button_y = y + h - 4
+    if h >= 26 and button_y - row >= 8:
+        section(scr, inner_x, row, inner_w, "KONTRAK", ACCENT, PANEL, "read-only")
+        row += 1
+        for glyph, text, hue in (
+                ("✓", "GET/HEAD saja · tanpa write", GOOD),
+                ("✓", "tanpa login · tanpa replay", GOOD),
+                ("◆", "batas: domain milikmu", ACCENT2)):
+            scr.put(inner_x, row, glyph, (hue, PANEL, True, False, False))
+            scr.put(inner_x + 2, row, clip(text, inner_w - 2),
+                    (FAINT, PANEL, False, False, False))
+            row += 1
+        row += 1
+
     info_y = row + 1
     if button_y - info_y >= 3:
-        scr.put(inner_x, info_y, "// STATUS", (DIM, PANEL, True, False, False))
+        section(scr, inner_x, info_y, inner_w, "STATUS", ACCENT, PANEL)
         info_y += 1
-        lines: list[tuple[str, int]] = []
         if app.running:
             prog = app.progress()
-            state = ">> SCAN BERJALAN" + (f" {int(prog * 100)}%" if prog is not None else "")
-            lines.append((state, WARN))
+            state = "SCAN BERJALAN" + (f" {int(prog * 100)}%" if prog is not None else "")
+            state_fg, state_bg = INK, WARN
         elif app.result:
-            lines.append((">> SELESAI", ACCENT))
+            state, state_fg, state_bg = "SELESAI", INK, GOOD
         else:
-            lines.append((">> SIAP", TEXT))
+            state, state_fg, state_bg = "SIAP", ACCENT2, DEEP2
+        pill(scr, inner_x, info_y, "● " + state, state_fg, state_bg)
+        info_y += 1
         findings = app._findings()
         if findings:
             verified = sum(1 for f in findings if f.get("verified"))
-            lines.append((f"{len(findings)} temuan · {verified} terverifikasi", TEXT))
-            audit = (app.result or {}).get("audit") or {}
-            if audit.get("risk_score") is not None:
-                lines.append((f"risiko {audit.get('risk_score')}/100 "
-                              f"({audit.get('risk_band') or '-'})", TEXT))
+            line = f"{len(findings)} temuan · {verified} verified"
         else:
-            lines.append(("belum ada temuan", FAINT))
-        if app.run:
-            lines.append((short_path(app.run.outdir), FAINT))
-        else:
-            root = RUNS_DIR if app.dest == "runs" else downloads_root()
-            lines.append((("out " + short_path(root)) if root else
-                          "Downloads tidak ditemukan", FAINT))
-        for text, colour in lines:
-            if info_y >= button_y - 1:
-                break
-            scr.put(inner_x, info_y, clip(text, inner_w),
-                    (colour, PANEL, False, False, False))
-            info_y += 1
+            line = "belum ada temuan"
+        audit = (app.result or {}).get("audit") or {}
+        if audit.get("risk_score") is not None:
+            line += f" · risk {audit.get('risk_score')}"
+        scr.put(inner_x, info_y, clip(line, inner_w), (TEXT, PANEL, False, False, False))
+        info_y += 1
+        if info_y < button_y - 1:
+            if app.run:
+                where = short_path(app.run.outdir)
+            else:
+                root = RUNS_DIR if app.dest == "runs" else downloads_root()
+                where = (("out " + short_path(root)) if root
+                         else "Downloads tidak ditemukan")
+            scr.put(inner_x, info_y, clip(where, inner_w),
+                    (FAINT, PANEL, False, False, False))
 
     start_focus = focused == "start"
-    start_bg = ACCENT2 if start_focus else ACCENT
     if app.running:
-        start_text = f"  {'◐◓◑◒'[app.spinner % 4]} SCAN BERJALAN "
-        start_bg = WARN
+        prog = app.progress()
+        start_text = "◐ SCAN BERJALAN"
+        if prog is not None:
+            start_text += f" {int(prog * 100)}%"
+        start_bg, key = WARN, "F6"
     elif app.demo:
-        start_text = "  ▶ DEMO MODE  [F5]"
+        start_text = "▶ DEMO MODE"
+        start_bg = ACCENT2 if start_focus else ACCENT
+        key = "F5"
     else:
-        start_text = "  ▶ MULAI SCAN  [F5]"
-    pad = inner_w - len(start_text)
-    scr.put(inner_x, button_y, " " + start_text + " " * max(0, pad - 1),
+        start_text = "▶ MULAI SCAN"
+        start_bg = ACCENT2 if start_focus else ACCENT
+        key = "F5"
+    scr.put(inner_x, button_y, " " * inner_w, (INK, start_bg, True, False, False))
+    scr.put(inner_x + 2, button_y, clip(start_text, inner_w - 9),
             (INK, start_bg, True, False, False))
+    cap = f" {key} "
+    if inner_w > len(cap) + 12:
+        scr.put(inner_x + inner_w - len(cap), button_y, cap,
+                (ACCENT2 if start_bg == ACCENT else INK, DEEP2, True, False, False))
     scr.region("start", inner_x, button_y, inner_w, 1)
+
     row2 = button_y + 1
     third = (inner_w - 2) // 3
-    items = (
-        ("stop", "■ STOP", 52 if app.running else 236),
-        ("doctor", "DIAG", 236),
-        ("cmd", "CMD", 236),
-    )
+    items = (("stop", "■ STOP", BAD), ("doctor", "DIAG", ACCENT2),
+             ("cmd", "CMD", ACCENT2))
     bx = inner_x
-    for name, text, bg in items:
+    for name, text, hue in items:
         focus_here = focused == name
-        fg = 231 if name == "stop" else TEXT
-        use_bg = 52 if (name == "stop" and focus_here) else (22 if focus_here else bg)
-        scr.put(bx, row2, " " + text.ljust(third - 2), (fg, use_bg, focus_here, False, False))
+        bg = FOCUS_BG if focus_here else PANEL2
+        fg = hue if (focus_here or name == "stop") else TEXT
+        if name == "stop" and app.running:
+            bg, fg = 52, 231
+        scr.put(bx, row2, " " + text.ljust(third - 2),
+                (fg, bg, focus_here, False, False))
         scr.region(name, bx, row2, third, 1)
         bx += third + 1
 
 
 def draw_right(scr: Screen, app: App, x: int, y: int, w: int, h: int,
                now: float) -> None:
-    scr.box(x, y, w, h, (DIM, PANEL, False, False, False))
+    scr.box(x, y, w, h, (EDGE, PANEL, False, False, False))
     tab_x = x + 1
     tab_y = y + 1
     tab_w = w - 2
@@ -2314,20 +2481,24 @@ def draw_right(scr: Screen, app: App, x: int, y: int, w: int, h: int,
         "chains": len(((app.result or {}).get("scan") or {})
                       .get("recon", {}).get("chains", {}).get("items", [])),
     }
+    scr.fill(tab_x, tab_y, tab_w, 1, (DIM, PANEL2, False, False, False))
     seg = max(4, tab_w // len(TABS))
     room = seg - 2
     for idx, (key, label) in enumerate(TABS):
         active = app.tab == key
         focus_here = app.focus == "tabs" and app.tab_index == idx
-        count = counts.get(key) or 0
         numbered = f"{idx + 1} {label}"
         short = f"{idx + 1} {TAB_SHORT[key]}"
-        options = [numbered + (f" {count}" if count else ""), numbered, short,
-                   f"{idx + 1} {TAB_SHORT[key][:3]}", label[:room]]
-        text = next((opt for opt in options if len(opt) <= room), label[:room])
+        options = [numbered, short, f"{idx + 1} {TAB_SHORT[key][:3]}",
+                   str(idx + 1)]
+        text = next((opt for opt in options if len(opt) <= room), str(idx + 1))
         seg_w = seg if idx < len(TABS) - 1 else tab_w - seg * (len(TABS) - 1)
-        fg = INK if active else (ACCENT if focus_here else DIM)
-        bg = ACCENT if active else (17 if focus_here else PANEL)
+        if active:
+            fg, bg = INK, ACCENT
+        elif focus_here:
+            fg, bg = ACCENT2, FOCUS_BG
+        else:
+            fg, bg = DIM, PANEL2
         pad = max(0, seg_w - len(text))
         left = pad // 2
         line = " " * left + text + " " * (seg_w - len(text) - left)
@@ -2336,31 +2507,39 @@ def draw_right(scr: Screen, app: App, x: int, y: int, w: int, h: int,
         scr.region(f"tab:{key}", tab_x + idx * seg, tab_y, seg_w, 1)
 
     strip_y = tab_y + 1
-    scr.fill(tab_x, strip_y, tab_w, 1, (FAINT, 234, False, False, False))
-    seg_text = f" ▸ {dict(TABS)[app.tab].upper()} "
-    scr.put(tab_x, strip_y, clip(seg_text, tab_w), (ACCENT, 234, True, False, False))
+    scr.fill(tab_x, strip_y, tab_w, 1, (TEXT, PANEL2, False, False, False))
+    scr.put(tab_x + 1, strip_y, "❯", (ACCENT2, PANEL2, True, False, False))
+    name = dict(TABS)[app.tab].upper()
+    scr.put(tab_x + 3, strip_y, name, (TEXT, PANEL2, True, False, False))
+    used = 3 + len(name) + 1
+    chips: list[tuple[str, int, int]] = []
     if app.running:
-        state = "// SCAN AKTIF"
+        chips.append(("◐ scan", INK, WARN))
+    elif app.demo:
+        chips.append(("◇ demo", ACCENT2, DEEP2))
     elif app.result:
-        state = f"// {len(app._findings())} TEMUAN"
+        chips.append(("● live", GOOD, 22))
     else:
-        state = "// MENUNGGU INPUT"
-    sx = tab_x + tab_w - len(state) - 1
-    if sx > tab_x + len(seg_text):
-        stream_w = sx - (tab_x + len(seg_text)) - 2
-        if stream_w >= 4:
-            stream_x = tab_x + len(seg_text) + 1
-            cells = ["░"] * stream_w
-            span = max(1, stream_w * 2 - 2)
-            pos = int(now * 16 + app.spinner) % span
-            if pos >= stream_w:
-                pos = span - pos
-            pos = max(0, min(stream_w - 1, pos))
-            cells[pos] = "█"
-            scr.put(stream_x, strip_y, "".join(cells),
-                    (22, 234, False, False, False))
-            scr.put(stream_x + pos, strip_y, "█", (ACCENT, 234, True, False, False))
-        scr.put(sx, strip_y, state, (DIM, 234, False, False, False))
+        chips.append(("○ idle", ACCENT2, DEEP2))
+    if counts["findings"]:
+        chips.append((f"{counts['findings']} temuan", ACCENT2, PANEL))
+    if counts["chains"]:
+        chips.append((f"{counts['chains']} chain", MED, PANEL))
+    need = sum(len(text) + 2 for text, *_ in chips) + len(chips) - 1
+    right_x = tab_x + tab_w - need
+    if right_x > tab_x + used + 3:
+        stream_w = min(right_x - (tab_x + used) - 2, 24)
+        if stream_w >= 6:
+            equalizer(scr, right_x - stream_w - 2, strip_y, stream_w, now,
+                      app.spinner if app.running else 0)
+        cursor = right_x
+        for text, fg, bg in chips:
+            scr.put(cursor, strip_y, f" {text} ", (fg, bg, True, False, False))
+            cursor += len(text) + 3
+    elif right_x > tab_x + used - 2:
+        text, fg, bg = chips[0]
+        scr.put(tab_x + tab_w - len(text) - 2, strip_y, f" {text} ",
+                (fg, bg, True, False, False))
 
     area_x = x + 2
     area_y = y + 3
@@ -2389,30 +2568,36 @@ LOGO = (
     "██████╔╝██║  ██║   ██║   ███████║",
     "╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚══════╝",
 )
+LOGO_SHADES = (ACCENT2, 45, ACCENT, 39, DEEP, DEEP2)
 
 
 def _empty(scr: Screen, x: int, y: int, w: int, h: int, text: str) -> None:
-    wrapped = textwrap.wrap(text, max(10, w - 4))
     banner_w = max(len(line) for line in LOGO)
-    need = len(LOGO) + 3 + len(wrapped)
-    if w >= banner_w + 2 and h >= need:
+    tagline = "SINGLE-FILE // WEB SECURITY CONSOLE"
+    cw = min(max(10, w - 4), 92)
+    cx = x + max(1, (w - cw) // 2)
+    wrapped = textwrap.wrap(text, cw)
+    need = len(LOGO) + 4 + len(wrapped)
+    if cw >= banner_w + 2 and h >= need:
         top = y + max(0, (h - need) // 2)
-        shades = (ACCENT2, ACCENT, 33, 27, 21, 19)
+        logo_x = cx + (cw - banner_w) // 2
         for i, line in enumerate(LOGO):
-            scr.put(x + 1, top + i, line, (shades[i], PANEL, False, False, False))
-        scr.put(x + 1, top + len(LOGO),
-                clip("SINGLE-FILE // WEB SECURITY CONSOLE", w - 2),
-                (ACCENT2, PANEL, True, False, False))
-        row = top + len(LOGO) + 2
+            scr.put(logo_x, top + i, line,
+                    (LOGO_SHADES[i], PANEL, False, False, False))
+        scr.put(cx + max(0, (cw - len(tagline)) // 2), top + len(LOGO),
+                clip(tagline, cw), (ACCENT2, PANEL, True, False, False))
+        hairline(scr, cx + max(0, (cw - len(tagline)) // 2),
+                 top + len(LOGO) + 1, min(cw, len(tagline)), PANEL)
+        row = top + len(LOGO) + 3
         for i, line in enumerate(wrapped):
             if row + i >= y + h:
                 break
-            scr.put(x + 1, row + i, clip(line, w - 2),
+            scr.put(cx, row + i, clip(line, cw),
                     (FAINT, PANEL, False, False, False))
         return
     pad = max(0, (h - 2) // 2)
     for i, line in enumerate(wrapped):
-        scr.put(x + 1, y + pad + i, clip(line, w - 2),
+        scr.put(cx, y + pad + i, clip(line, cw),
                 (FAINT, PANEL, False, False, False))
 
 
@@ -2448,26 +2633,29 @@ def draw_console(scr: Screen, app: App, x: int, y: int, w: int, h: int) -> None:
             break
         line = lines[idx]
         low = line.lower()
+        gutter = None
         if re.search(r"(^|\s)(error|blocked|fail|traceback)", low):
-            style = (BAD, PANEL, False, False, False)
+            style, gutter = (BAD, PANEL, False, False, False), BAD
         elif "warn" in low or "invalid" in low or "hint" in low:
-            style = (WARN, PANEL, False, False, False)
+            style, gutter = (WARN, PANEL, False, False, False), WARN
         elif re.match(r"\[\d+/\d+\]", low) or low.startswith("preflight"):
             style = (ACCENT2, PANEL, True, False, False)
         elif "verified" in low or "observed" in low or " ok" in low:
-            style = (GOOD, PANEL, False, False, False)
+            style, gutter = (GOOD, PANEL, False, False, False), GOOD
         else:
             style = (TEXT, PANEL, False, False, False)
-        scr.put(x, y + i, clip(line, w - 1), style)
-    flag = "follow" if app.follow else f"scroll +{app.console_off}"
-    scr.put(x + w - len(flag) - 1, y + h - 1, flag,
-            (FAINT, PANEL, False, False, False))
+        if gutter is not None:
+            scr.put(x, y + i, "▏", (gutter, PANEL, True, False, False))
+        scr.put(x + 1, y + i, clip(line, w - 2), style)
+    flag = "follow" if app.follow else f"+{app.console_off}"
+    pill(scr, x + w - len(flag) - 2, y + h - 1, flag,
+         ACCENT2 if app.follow else DIM, PANEL2)
 
 
 def draw_system(scr: Screen, app: App, x: int, y: int, w: int, h: int) -> None:
     monitor = getattr(app, "monitor", None)
     row = y
-    scr.put(x, row, "// SISTEM", (DIM, PANEL, True, False, False))
+    section(scr, x, row, w, "// SISTEM", ACCENT, PANEL)
     row += 1
     label = (DIM, PANEL, True, False, False)
     value = (TEXT, PANEL, False, False, False)
@@ -2546,8 +2734,8 @@ def draw_system(scr: Screen, app: App, x: int, y: int, w: int, h: int) -> None:
 def draw_summary(scr: Screen, app: App, x: int, y: int, w: int, h: int) -> None:
     if h >= 18:
         block_h = 7
-        scr.put(x, y + h - block_h - 1, "─" * max(0, w - 1),
-                (238, PANEL, False, False, False))
+        scr.put(x, y + h - block_h - 1, "╌" * max(0, w - 1),
+                (EDGE, PANEL, False, False, False))
         draw_system(scr, app, x, y + h - block_h, w, block_h)
         h -= block_h + 1
     if not app.result:
@@ -2559,56 +2747,61 @@ def draw_summary(scr: Screen, app: App, x: int, y: int, w: int, h: int) -> None:
     audit = app.result.get("audit") or {}
     findings = scan.get("findings") or []
     counts = {sev: 0 for sev in ("critical", "high", "medium", "low", "info")}
-    for f in findings:
-        sev = f.get("severity")
+    for finding in findings:
+        sev = finding.get("severity")
         if sev in counts:
             counts[sev] += 1
     score = int(audit.get("risk_score") or (scan.get("stats") or {}).get("risk_score") or 0)
     band = audit.get("risk_band") or (scan.get("stats") or {}).get("risk_band") or "-"
-    verified = sum(1 for f in findings if f.get("verified"))
+    verified = sum(1 for finding in findings if finding.get("verified"))
     chains = (scan.get("recon") or {}).get("chains") or {}
     stats = scan.get("stats") or {}
 
     row = y
-    target_text = ">_ " + str(scan.get("target", "-"))
-    scr.put(x, row, clip(target_text, w - 12),
+    scr.put(x, row, "❯", (ACCENT2, PANEL, True, False, False))
+    scr.put(x + 2, row, clip(str(scan.get("target", "-")), w - 12),
             (ACCENT, PANEL, True, False, False))
-    if app.demo:
-        demo_x = x + len(clip(target_text, w - 24)) + 1
-        if demo_x + 8 < x + w:
-            scr.put(demo_x, row, "[ DEMO ]", (ACCENT2, PANEL, True, False, False))
-    row += 2
-    bar_w = max(10, min(38, w - 24))
-    filled = int(bar_w * min(100, score) / 100)
+    if app.demo and w >= 40:
+        pill(scr, x + w - 8, row, "DEMO", INK, ACCENT2)
+    row += 1
+    divider(scr, x, row, max(0, w - 1))
+    row += 1
+
     colour = GOOD if score < 25 else WARN if score < 50 else BAD if score < 75 else CRIT
-    scr.put(x, row, "RISK ", (DIM, PANEL, True, False, False))
-    scr.put(x + 5, row, "█" * filled, (colour, PANEL, False, False, False))
-    scr.put(x + 5 + filled, row, "░" * (bar_w - filled), (238, PANEL, False, False, False))
-    scr.put(x + 6 + bar_w, row,
-            clip(f" {score}/100 {band}", w - (6 + bar_w)),
-            (colour, PANEL, True, False, False))
+    scr.put(x, row, "RISK", (DIM, PANEL, True, False, False))
+    level = f"{score}/100"
+    scr.put(x + 6, row, level, (colour, PANEL, True, False, False))
+    band_text = str(band).upper()
+    band_x = x + w - len(band_text) - 2
+    if band_text and band_text not in ("-", "NONE") \
+            and band_x > x + 8 + len(level):
+        pill(scr, band_x, row, band_text, INK, colour)
+    row += 1
+    meter(scr, x, row, score, max(6, w - 2), colour, PANEL)
     row += 2
 
-    scr.put(x, row, "// SEVERITY", (DIM, PANEL, True, False, False))
-    row += 1
-    top = max(1, max(counts.values()))
-    for sev in ("critical", "high", "medium", "low", "info"):
-        count = counts[sev]
-        bar = round(20 * count / top)
-        bg = {"critical": CRIT, "high": BAD, "medium": MED,
-              "low": LOW, "info": INFO}[sev]
-        scr.put(x, row, f"{sev.upper():<9}", (bg, PANEL, True, False, False))
-        scr.put(x + 10, row, "█" * bar + "░" * (20 - bar),
-                (bg, PANEL, False, False, False))
-        scr.put(x + 31, row, f"{count}", (TEXT, PANEL, True, False, False))
+    if row + 2 < y + h:
+        section(scr, x, row, w, "SEVERITY", ACCENT, PANEL,
+                f"{len(findings)} temuan")
         row += 1
-    row += 1
+        top = max(1, max(counts.values()))
+        bar_w = max(6, min(24, w - 26))
+        for sev in ("critical", "high", "medium", "low", "info"):
+            count = counts[sev]
+            scr.put(x, row, f"{sev.upper():<8}", (SEV_FG[sev], PANEL, True,
+                                                 False, False))
+            meter(scr, x + 9, row, 100.0 * count / top, bar_w,
+                  SEV_FG[sev], PANEL)
+            scr.put(x + 10 + bar_w, row, str(count), (TEXT, PANEL, True,
+                                                     False, False))
+            row += 1
+        row += 1
 
     pairs = [
         ("verified", f"{verified}/{len(findings)}"),
         ("hosts", str(stats.get("live_hosts", 0))),
         ("subdomains", str(stats.get("subdomains", 0))),
-        ("chains", f"{chains.get('total', 0)} ({chains.get('observed', 0)} observed)"),
+        ("chains", f"{chains.get('total', 0)} ({chains.get('observed', 0)} obs)"),
         ("bypass", str(stats.get("bypasses", 0))),
         ("secrets", str(stats.get("secrets", 0))),
     ]
@@ -2616,22 +2809,34 @@ def draw_summary(scr: Screen, app: App, x: int, y: int, w: int, h: int) -> None:
     col_w = (w - 1) // per_row
     for i, (key, value) in enumerate(pairs):
         col = i % per_row
-        line = i // per_row
+        line_idx = i // per_row
         px = x + col * col_w
-        py = row + line
+        py = row + line_idx
         if py >= y + h - 3:
             break
         scr.put(px, py, key.upper(), (DIM, PANEL, False, False, False))
-        scr.put(px + 11, py, clip(value, col_w - 12), (TEXT, PANEL, True, False, False))
+        value_x = px + col_w - 2 - len(value)
+        if value_x > px + len(key) + 2:
+            scr.put(px + len(key) + 1, py, "·" * (value_x - px - len(key) - 2),
+                    (EDGE, PANEL, False, False, False))
+        scr.put(value_x, py, clip(value, col_w - 2),
+                (TEXT, PANEL, True, False, False))
     row += (len(pairs) + per_row - 1) // per_row + 1
 
-    if row < y + h - 2:
+    if row < y + h - 1:
         outdir = str(app.run.outdir) if app.run else "-"
-        scr.put(x, row, clip("outdir  " + outdir, w - 2),
+        scr.put(x, row, "⌂", (ACCENT2, PANEL, True, False, False))
+        scr.put(x + 2, row, clip(outdir, w - 3),
                 (FAINT, PANEL, False, False, False))
         row += 1
-        scr.put(x, row, clip("[o] buka report.html   [3] findings   [5] recon", w - 2),
-                (ACCENT2, PANEL, False, False, False))
+    if row < y + h:
+        keycap(scr, x, row, "o", "report", PANEL)
+        x2 = x + 12
+        for key, label in (("3", "temuan"), ("5", "recon")):
+            need = len(key) + 3 + len(label) + 2
+            if x2 + need > x + w:
+                break
+            x2 += keycap(scr, x2, row, key, label, PANEL) + 2
 
 
 def draw_findings(scr: Screen, app: App, x: int, y: int, w: int, h: int) -> None:
@@ -2641,13 +2846,24 @@ def draw_findings(scr: Screen, app: App, x: int, y: int, w: int, h: int) -> None
                "Tidak ada finding (atau scan belum selesai). Temuan akan muncul "
                "di sini; klik baris atau Enter untuk detail dan PoC.")
         return
-    visible = max(1, h - 1)
+    narrow = w < 58
+    scr.put(x, y, "SEV", (FAINT, PANEL, True, False, False))
+    scr.put(x + 11, y, "TEMUAN", (FAINT, PANEL, True, False, False))
+    if not narrow:
+        scr.put(x + w - 5, y, "HOST", (FAINT, PANEL, True, False, False))
+    hairline(scr, x, y + 1, max(0, w - 1), PANEL)
+    top = y + 2
+    visible = max(1, h - 3)
     if app.find_sel < app.find_scroll:
         app.find_scroll = app.find_sel
     if app.find_sel >= app.find_scroll + visible:
         app.find_scroll = app.find_sel - visible + 1
-    narrow = w < 58
-    title_w = max(12, w - 13) if narrow else max(10, w - 34)
+    title_x = x + 11
+    host_w = 20
+    if narrow:
+        title_w = max(8, w - title_x - 4)
+    else:
+        title_w = max(8, (x + w - 2 - host_w) - title_x - 2)
     for i in range(visible):
         idx = app.find_scroll + i
         if idx >= len(findings):
@@ -2655,28 +2871,39 @@ def draw_findings(scr: Screen, app: App, x: int, y: int, w: int, h: int) -> None
         f = findings[idx]
         sev = f.get("severity", "info")
         selected = idx == app.find_sel
-        bg = 238 if selected else PANEL
-        badge = f" {sev.upper():<8}"
-        scr.put(x, y + i, badge, sev_style(sev))
+        bg = PANEL2 if selected else PANEL
+        row = top + i
+        if selected:
+            scr.fill(x, row, w - 1, 1, (TEXT, bg, False, False, False))
+            scr.put(x, row, "▌", (ACCENT2, bg, True, False, False))
+        hue = SEV_FG.get(sev, FAINT)
+        scr.put(x + 1, row, "●", (hue, bg, True, False, False))
+        scr.put(x + 3, row, f"{sev.upper():<8}", (hue, bg, True, False, False))
         title = clip(f.get("title", ""), title_w)
-        scr.put(x + 10, y + i, title.ljust(title_w), (TEXT, bg, selected, False, False))
+        scr.put(title_x, row, title, (TEXT, bg, selected, False, False))
         flags = []
         if f.get("verified"):
-            flags.append("V")
+            flags.append("✓")
         if f.get("decoy_suspected"):
             flags.append("D")
         if narrow:
-            flags_x = min(x + 10 + len(title) + 1, x + w - 1)
-            scr.put(flags_x, y + i, clip(",".join(flags), x + w - flags_x),
-                    (GOOD if f.get("verified") else DIM, bg, False, False, False))
+            flags_x = title_x + len(title) + 1
+            if flags and flags_x < x + w - 1:
+                scr.put(flags_x, row, "".join(flags),
+                        (GOOD if "✓" in flags else WARN, bg, True, False, False))
         else:
-            host = clip(f.get("host", ""), 18) + (" " + ",".join(flags) if flags else "")
-            scr.put(x + w - 22, y + i, clip(host, 21).rjust(21),
-                    (GOOD if f.get("verified") else DIM, bg, False, False, False))
-        scr.region(f"find:{idx}", x, y + i, w, 1)
-    scr.put(x, y + h - 1, clip(
-        f"{app.find_sel + 1}/{len(findings)} · ↑↓ pilih · Enter detail · "
-        "PgUp/PgDn", w - 1), (FAINT, PANEL, False, False, False))
+            host = clip(f.get("host", ""), host_w)
+            host_x = x + w - 2 - len(host)
+            scr.put(host_x, row, host, (DIM, bg, False, False, False))
+            if flags:
+                scr.put(host_x - 2, row, "".join(flags)[:1],
+                        (GOOD if "✓" in flags else WARN, bg, True, False, False))
+        scr.region(f"find:{idx}", x, row, w, 1)
+    counter = f"{app.find_sel + 1}/{len(findings)}"
+    scr.put(x, y + h - 1, counter, (ACCENT2, PANEL, True, False, False))
+    scr.put(x + len(counter) + 2, y + h - 1,
+            clip("↑↓ pilih · Enter detail · PgUp/PgDn", w - len(counter) - 3),
+            (FAINT, PANEL, False, False, False))
 
 
 def draw_chains(scr: Screen, app: App, x: int, y: int, w: int, h: int) -> None:
@@ -2690,32 +2917,42 @@ def draw_chains(scr: Screen, app: App, x: int, y: int, w: int, h: int) -> None:
     blocks: list[list[tuple[str, tuple]]] = []
     for chain in items:
         block: list[tuple[str, tuple]] = []
-        block.append((f"{chain.get('title','chain')}", (ACCENT, PANEL, True, False, False)))
-        block.append((
-            f"  {str(chain.get('severity','')).upper()} · {chain.get('status','')}"
-            f" · {chain.get('host','')}", (DIM, PANEL, False, False, False)))
+        sev = str(chain.get("severity", "")).lower()
+        block.append((clip("▎ " + str(chain.get("title", "chain")), w - 1),
+                      (ACCENT, PANEL, True, False, False)))
+        meta = (f"  ● {sev.upper()}   {chain.get('status','')}   "
+                f"{chain.get('host','')}")
+        block.append((clip(meta, w - 1),
+                      (SEV_FG.get(sev, DIM), PANEL, False, False, False)))
         summary = chain.get("summary") or ""
         for line in textwrap.wrap(summary, max(20, w - 6)):
             block.append(("  " + line, (TEXT, PANEL, False, False, False)))
-        for position, link in enumerate(chain.get("links") or [], start=1):
+        links = chain.get("links") or []
+        for position, link in enumerate(links, start=1):
             role = CHAIN_ROLE_ID.get(str(link.get("role")),
                                      str(link.get("role") or ""))
-            block.append((
-                f"  {position}. [{role}] {link.get('title','')} "
-                f"[{link.get('severity','')}/{link.get('status','')}] "
-                f"{link.get('reproductions',0)}x @ {link.get('host','')}",
-                (250, PANEL, False, False, False)))
+            connector = "  └─" if position == len(links) else "  ├─"
+            repro = link.get("reproductions") or 0
+            body = (f" {position} {role} · {link.get('title','')} "
+                    f"[{link.get('severity','')}]")
+            if repro:
+                body += f" {repro}x"
+            block.append((clip(connector + body, w - 1),
+                          (250, PANEL, False, False, False)))
         impact = chain.get("impact") or ""
         if impact:
             for line in textwrap.wrap("dampak: " + impact, max(20, w - 6)):
-                block.append(("  " + line, (DIM, PANEL, False, False, False)))
-        for step in (chain.get("proof") or [])[:3]:
+                block.append(("  ↳ " + line, (MED, PANEL, False, False, False)))
+        proof = chain.get("proof") or []
+        if isinstance(proof, str):
+            proof = [proof]
+        for step in proof[:3]:
             for line in textwrap.wrap("bukti: " + str(step), max(20, w - 6)):
-                block.append(("  " + line, (FAINT, PANEL, False, False, False)))
+                block.append(("  ◇ " + line, (FAINT, PANEL, False, False, False)))
         limitations = chain.get("limitations") or ""
         if limitations:
             for line in textwrap.wrap("batas: " + limitations, max(20, w - 6)):
-                block.append(("  " + line, (FAINT, PANEL, False, False, False)))
+                block.append(("  ⚠ " + line, (FAINT, PANEL, False, False, False)))
         block.append(("", STYLE_DEFAULT))
         blocks.append(block)
     flat: list[tuple[str, tuple]] = []
@@ -2744,18 +2981,27 @@ def draw_recon(scr: Screen, app: App, x: int, y: int, w: int, h: int) -> None:
         "verified", "cves", "cve_candidates", "secrets", "source_maps",
         "bundle_drift", "bypasses", "takeovers", "injection_findings",
     ) if k in stats]
-    col_w = max(22, (w - 2) // 2)
-    rows = (len(keys) + 1) // 2
+    row = y
+    section(scr, x, row, w, "METRIK", ACCENT, PANEL, f"{len(keys)} metrik")
+    row += 1
+    col_w = max(22, (w - 1) // 2)
     for i, key in enumerate(keys):
+        cy = row + i // 2
+        if cy >= y + h - 1:
+            break
         cx = x + (i % 2) * col_w
-        cy = y + i // 2
-        scr.put(cx, cy, clip(key.replace("_", " ").upper(), col_w - 2),
-                (DIM, PANEL, False, False, False))
-        scr.put(cx + col_w - 8, cy, clip(str(stats[key]), 6),
-                (TEXT, PANEL, True, False, False))
-    row = y + rows + 1
+        label = clip(key.replace("_", " ").upper(), col_w - 10)
+        scr.put(cx, cy, label, (DIM, PANEL, False, False, False))
+        value = clip(str(stats[key]), 6)
+        scr.put(cx + col_w - 2 - len(value), cy, value,
+                (ACCENT2, PANEL, True, False, False))
+        if col_w - 3 - len(label) - len(value) > 2:
+            scr.put(cx + len(label) + 1, cy, "·" * (col_w - 3 - len(label)
+                                                    - len(value) - 1),
+                    (EDGE, PANEL, False, False, False))
+    row += (len(keys) + 1) // 2 + 1
     if row < y + h - 1:
-        scr.put(x, row, "WAF / CDN (pasif)", (DIM, PANEL, True, False, False))
+        section(scr, x, row, w, "WAF / CDN", ACCENT, PANEL, "pasif")
         row += 1
         providers = ((recon.get("waf") or {}).get("providers") or [])
         if providers:
@@ -2763,12 +3009,29 @@ def draw_recon(scr: Screen, app: App, x: int, y: int, w: int, h: int) -> None:
                 if row >= y + h:
                     break
                 hosts = ", ".join(provider.get("hosts") or [])
-                scr.put(x, row, clip(f"◈ {provider.get('provider','')}  {hosts}", w - 1),
-                        (GOOD, PANEL, False, False, False))
+                scr.put(x, row, "◆", (GOOD, PANEL, True, False, False))
+                scr.put(x + 2, row, clip(str(provider.get("provider", "")), 18),
+                        (GOOD, PANEL, True, False, False))
+                scr.put(x + 21, row, clip(hosts, w - 21),
+                        (FAINT, PANEL, False, False, False))
                 row += 1
         else:
             scr.put(x, row, "tidak ada signature terdeteksi",
                     (FAINT, PANEL, False, False, False))
+
+
+FILE_GLYPHS = (
+    (".html", "◈"), (".json", "▤"), (".md", "▥"), (".sh", "⌘"),
+    (".txt", "▦"), (".body", "◇"), (".headers", "◇"),
+)
+
+
+def file_glyph(path: str) -> str:
+    low = path.lower()
+    for suffix, glyph in FILE_GLYPHS:
+        if low.endswith(suffix):
+            return glyph
+    return "▣"
 
 
 def draw_files(scr: Screen, app: App, x: int, y: int, w: int, h: int) -> None:
@@ -2788,48 +3051,61 @@ def draw_files(scr: Screen, app: App, x: int, y: int, w: int, h: int) -> None:
         size = item["size"]
         human = (f"{size / 1048576:.1f} MB" if size > 1048576
                  else f"{size / 1024:.1f} KB" if size > 1024 else f"{size} B")
-        scr.put(x, y + i, clip(item["path"], w - 12), (TEXT, PANEL, False, False, False))
-        scr.put(x + w - 11, y + i, human.rjust(9), (DIM, PANEL, False, False, False))
-    extra = f" (+{total - len(files)} tidak ditampilkan)" if total > len(files) else ""
-    scr.put(x, y + h - 1, clip(f"{len(files)} file · {app.run.outdir if app.run else ''}{extra}", w - 1),
+        scr.put(x, y + i, file_glyph(item["path"]), (ACCENT2, PANEL, True,
+                                                    False, False))
+        scr.put(x + 2, y + i, clip(item["path"], w - 14),
+                (TEXT, PANEL, False, False, False))
+        scr.put(x + w - 11, y + i, human.rjust(9), (DIM, PANEL, False, False,
+                                                    False))
+    extra = f" (+{total - len(files)})" if total > len(files) else ""
+    scr.put(x, y + h - 1, clip(f"{len(files)} file · "
+                               f"{app.run.outdir if app.run else ''}{extra}", w - 1),
             (FAINT, PANEL, False, False, False))
 
 
 def draw_advanced(scr: Screen, app: App, width: int, height: int) -> None:
     bw = min(72, width - 8)
-    bh = min(len(App.ADV_FIELDS) + 6, height - 4)
+    bh = min(len(App.ADV_FIELDS) + 7, height - 4)
     bx = (width - bw) // 2
     by = (height - bh) // 2
-    scr.box(bx, by, bw, bh, (FAINT, BG, False, False, False),
-            title="PENGATURAN LANJUTAN",
+    scr.box(bx, by, bw, bh, (EDGE, BG, False, False, False),
+            title="▎ PENGATURAN LANJUTAN",
             title_style=(ACCENT, BG, True, False, False))
-    scr.put(bx + 2, by + 1,
-            "↑↓ pilih · Enter/Space ubah · Esc tutup"
-            if not app.editing else "ketik nilai · Enter simpan · Esc batal",
-            (DIM, BG, False, False, False))
+    section(scr, bx + 2, by + 1, bw - 4,
+            "NAVIGASI" if not app.editing else "EDIT",
+            ACCENT2 if app.editing else ACCENT, BG,
+            "Esc batal" if app.editing else "Esc tutup")
     for i, (name, label, kind) in enumerate(App.ADV_FIELDS):
         row = by + 3 + i
-        if row >= by + bh - 1:
+        if row >= by + bh - 2:
             break
         focus_here = i == app.adv_index
-        bg = 236 if focus_here else BG
+        bg = FOCUS_BG if focus_here else BG
+        if focus_here:
+            scr.fill(bx + 2, row, bw - 4, 1, (TEXT, bg, False, False, False))
+            scr.put(bx + 2, row, "▌", (ACCENT2, bg, True, False, False))
         if kind == "text":
             value = getattr(app, name)
             if app.editing and app._adv_edit and app._adv_edit[0] == name:
                 buf = "".join(app.editing[1])
                 pos = app.edit_pos
                 shown = buf[:pos] + "▌" + buf[pos:]
-                text = f"{label:<24} {shown}"
+                text = f"{label:<22} {shown}"
             else:
-                text = f"{label:<24} [{value}]"
+                text = f"{label:<22} [{value}]"
         elif kind == "cycle":
             value = getattr(app, name)
-            text = f"{label:<24} < {value} >"
+            text = f"{label:<22} ‹ {value} ›"
         else:
             value = getattr(app, name)
-            text = f"{label:<24} [{'x' if value else ' '}]"
-        scr.put(bx + 2, row, clip(text, bw - 4),
+            text = f"{label:<22} [{'✓' if value else ' '}]"
+        scr.put(bx + 4, row, clip(text, bw - 6),
                 (TEXT if focus_here else FAINT, bg, focus_here, False, False))
+    hint_y = by + bh - 2
+    scr.put(bx + 2, hint_y,
+            "↑↓ pilih · Enter/Space ubah" if not app.editing
+            else "ketik nilai · Enter simpan · Esc batal",
+            (DIM, BG, False, False, False))
 
 
 def draw_overlay(scr: Screen, app: App, width: int, height: int) -> None:
@@ -2842,13 +3118,14 @@ def draw_overlay(scr: Screen, app: App, width: int, height: int) -> None:
             lines.append("")
             continue
         lines.extend(textwrap.wrap(raw, inner_w) or [""])
-    bh = min(height - 4, len(lines) + 4)
+    bh = min(height - 4, len(lines) + 5)
     bx = (width - bw) // 2
     by = (height - bh) // 2
-    scr.box(bx, by, bw, bh, (FAINT, BG, False, False, False),
-            title=clip(title, bw - 8),
+    scr.box(bx, by, bw, bh, (EDGE, BG, False, False, False),
+            title=clip(title, bw - 10),
             title_style=(ACCENT, BG, True, False, False))
-    visible = bh - 4
+    hairline(scr, bx + 1, by + 1, bw - 2, BG, (NIGHT, BG))
+    visible = bh - 5
     off = min(app.overlay_scroll, max(0, len(lines) - visible))
     if off != app.overlay_scroll:
         app.overlay_scroll = off
@@ -2856,14 +3133,24 @@ def draw_overlay(scr: Screen, app: App, width: int, height: int) -> None:
         idx = off + i
         if idx >= len(lines):
             break
-        scr.put(bx + 2, by + 2 + i, clip(lines[idx], bw - 4),
-                (TEXT, BG, False, False, False))
+        text = lines[idx]
+        if text.startswith(("GET ", "POST ", "HEAD ", "curl ")):
+            style = (ACCENT2, BG, False, False, False)
+        elif text.startswith(("Remediation", "Verification", "Evidence",
+                              "Description", "PoC")):
+            style = (TEXT, BG, True, False, False)
+        else:
+            style = (TEXT, BG, False, False, False)
+        scr.put(bx + 2, by + 2 + i, clip(text, bw - 4), style)
+    footer_y = by + bh - 2
+    scr.put(bx + 2, footer_y, "─" * max(0, bw - 4), (NIGHT, BG, False, False,
+                                                    False))
     hint = "↑↓ scroll · Esc tutup"
     if kind == "finding":
         hint = "↑↓ scroll · Esc tutup · [o] buka report"
     elif len(lines) > visible:
         hint += f" · {off + visible}/{len(lines)}"
-    scr.put(bx + 2, by + bh - 2, clip(hint, bw - 4),
+    scr.put(bx + 2, by + bh - 1, clip(hint, bw - 4),
             (DIM, BG, False, False, False))
 
 
@@ -3226,53 +3513,49 @@ def boot_frame(app: App, width: int, height: int, step: int, total: int,
     now = time.time() if now is None else now
     scr = Screen(width, height)
     scr.fill(0, 0, width, height, (TEXT, BG, False, False, False))
-    margin = 10 if width >= 96 else 6
-    for row in range(height):
-        scr.put(0, row, matrix_stream(now, margin, row), (22, BG, False, False, False))
-        scr.put(width - margin, row, matrix_stream(now, margin, row + 5),
-                (22, BG, False, False, False))
-
     banner_w = max(len(line) for line in LOGO)
-    left = max(0, (width - banner_w) // 2)
-    need = len(LOGO) + 4 + total + 2
-    top = max(1, (height - need) // 2)
-    shades = (ACCENT, ACCENT, 40, 34, 29, 23)
-    for i, line in enumerate(LOGO):
-        scr.put(left, top + i, line, (shades[i], BG, False, False, False))
-    tagline = "SINGLE-FILE // WEB SECURITY CONSOLE"
-    tag_x = max(0, (width - len(tagline)) // 2)
-    scr.put(tag_x, top + len(LOGO),
-            clip(tagline, width), (ACCENT2, BG, True, False, False))
+    block_w = max(banner_w + 2, min(72, width - 6))
+    left = max(0, (width - block_w) // 2)
+    top = max(1, (height - (len(LOGO) + 4 + total)) // 2)
 
-    bar_w = max(16, min(48, width - 24))
-    filled = max(0, min(bar_w, int(round(bar_w * step / max(1, total)))))
-    bar_x = max(0, (width - bar_w - 8) // 2)
+    for row in (top - 1, top + len(LOGO) + 3):
+        if 0 <= row < height:
+            hairline(scr, left, row, block_w, BG, (NIGHT, BG))
+
+    logo_x = left + max(0, (block_w - banner_w) // 2)
+    for i, line in enumerate(LOGO):
+        scr.put(logo_x, top + i, line,
+                (LOGO_SHADES[i], BG, False, False, False))
+    tagline = "SINGLE-FILE // WEB SECURITY CONSOLE"
+    scr.put(max(0, (width - len(tagline)) // 2), top + len(LOGO), tagline,
+            (ACCENT2, BG, True, False, False))
+
+    bar_w = max(16, min(48, block_w - 16))
+    bar_x = left + max(0, (block_w - bar_w - 8) // 2)
     bar_y = top + len(LOGO) + 2
-    scr.put(bar_x, bar_y, "[" + "█" * filled + "░" * (bar_w - filled) + "]",
-            (ACCENT2, BG, False, False, False))
-    scr.put(bar_x + bar_w + 3, bar_y, f"{step:>2}/{total}",
+    meter(scr, bar_x, bar_y, 100.0 * step / max(1, total), bar_w, ACCENT2,
+          BG, TRACK)
+    scr.put(bar_x + bar_w + 2, bar_y, f"{step:>2}/{total}",
             (DIM, BG, True, False, False))
 
     row = top + len(LOGO) + 4
-    step_x = margin + 1
     spinner = "◐◓◑◒"[int(now * 8) % 4]
+    limit = left + block_w
     for idx, (name, detail) in enumerate(BOOT_STEPS):
-        if row >= height - 1:
+        if row >= height - 2:
             break
-        scr.fill(margin, row, max(0, width - 2 * margin), 1,
-                 (TEXT, BG, False, False, False))
         if idx < step:
             tag, colour = "[ ok ]", GOOD
         elif idx == step:
             tag, colour = f"[{spinner:^4}]", WARN
         else:
             tag, colour = "[    ]", FAINT
-        scr.put(step_x, row, tag, (colour, BG, True, False, False))
-        scr.put(step_x + 7, row, clip(name, width - step_x - 8),
+        scr.put(left, row, tag, (colour, BG, True, False, False))
+        scr.put(left + 7, row, clip(name, block_w - 8),
                 (TEXT if idx <= step else FAINT, BG, False, False, False))
-        dx = step_x + 7 + len(name) + 2
-        if idx < step and dx < width - margin - 1:
-            scr.put(dx, row, clip(detail, width - margin - dx - 1),
+        dx = left + 7 + len(name) + 2
+        if idx < step and dx < limit - 1:
+            scr.put(dx, row, clip(detail, limit - dx - 1),
                     (DIM, BG, False, False, False))
         row += 1
 
