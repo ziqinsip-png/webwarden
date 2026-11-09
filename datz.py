@@ -2062,9 +2062,10 @@ def draw_header(scr: Screen, app: App, width: int, now: float) -> None:
     ]
     if app.license_badge:
         chips.append((f" {app.license_badge} ", ACCENT, DEEP2, True))
-    if width >= 100 and app.engine_version:
-        label = app.engine_version.split()[-1]
-        chips.append((f" v{label} ", FAINT, PANEL2, False))
+    label = [part for part in (app.engine_version or "").split()
+             if not part.startswith("(")]
+    if width >= 100 and label:
+        chips.append((f" v{label[-1]} ", FAINT, PANEL2, False))
     need = sum(len(text) for text, *_ in chips) + len(chips) - 1
     right_x = width - need
     if right_x > pos + 4:
@@ -4466,8 +4467,7 @@ def seed_demo(app: App, tab: str = "summary") -> None:
 def snapshot(args) -> int:
     width = max(72, args.width)
     height = max(20, args.height)
-    app = App(Path("webwarden.pyz"),
-              "0.8.4 (demo)" if args.demo else "0.8.4")
+    app = App(Path("webwarden.pyz"), "")
     app.target = "example.com"
     app.authorized = True
     app.scopes = "*.example.com"
@@ -4476,6 +4476,10 @@ def snapshot(args) -> int:
         if args.tab == "findings":
             app.find_sel = 1
     screen = draw(app, width, height)
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
     sys.stdout.write(screen.to_text() + "\n")
     return 0
 
