@@ -589,6 +589,7 @@ def read_result(outdir: Path) -> dict:
 RESET = "\x1b[0m"
 CLEAR = "\x1b[2J"
 HOME_CURSOR = "\x1b[H"
+CLEAR_LINE = "\x1b[K"
 
 # 256-colour palette: midnight-blue console.
 # Four surfaces stack from canvas to chrome, so panels read as cards rather
@@ -692,8 +693,8 @@ class Screen:
                 return name
         return None
 
-    def render(self, colour: bool = True) -> str:
-        rows = []
+    def rows(self, colour: bool = True) -> list[str]:
+        out = []
         for y in range(self.h):
             current = None
             parts = []
@@ -705,8 +706,11 @@ class Screen:
                 parts.append(self.ch[y][x])
             if colour:
                 parts.append(RESET)
-            rows.append("".join(parts).rstrip())
-        return HOME_CURSOR + "\r\n".join(rows) + RESET
+            out.append("".join(parts) + CLEAR_LINE)
+        return out
+
+    def render(self, colour: bool = True) -> str:
+        return HOME_CURSOR + "\r\n".join(self.rows(colour)) + RESET
 
     def to_text(self) -> str:
         return "\n".join("".join(row).rstrip() for row in self.ch)
@@ -799,13 +803,16 @@ def section(scr: "Screen", x: int, y: int, w: int, label: str,
 
 def equalizer(scr: "Screen", x: int, y: int, width: int, now: float,
               phase: int = 0, bg: int = PANEL2) -> None:
-    """Animated VU bars for the tab rail; calm when idle, fast when scanning."""
+    """VU bars for the tab rail: a still baseline when idle, moving only while
+    a scan runs. Nothing on screen drifts on its own."""
     glyphs = "▁▂▃▄▅▆▇█"
     live = bool(phase)
-    speed = 7.0 if live else 1.1
     for i in range(max(0, width)):
-        wave = (math.sin(now * speed + i * 0.9 + phase) + 1.0) / 2.0
-        level = min(len(glyphs) - 1, int(wave * (len(glyphs) if live else 4)))
+        if live:
+            wave = (math.sin(now * 7.0 + i * 0.9 + phase) + 1.0) / 2.0
+            level = min(len(glyphs) - 1, int(wave * len(glyphs)))
+        else:
+            level = 0
         colour = _stop(GRAD if live else (DEEP, DEEP2), i, width)
         scr.put(x + i, y, glyphs[level], (colour, bg, False, False, False))
 
@@ -1927,9 +1934,11 @@ dengan --no-weather atau DATZ_NO_WEATHER=1.
 
 ANIMASI
 Boot singkat (~1 detik) saat masuk; tombol apa saja
-melewatinya (--no-boot untuk langsung masuk). Di dalam UI:
-grafik VU berjalan di rail tab, meter risiko dan severity,
-kursor berkedip, spinner scan, dan sparkline CPU.
+melewatinya (--no-boot untuk langsung masuk). Saat idle layar
+diam: hanya jam, sparkline CPU, dan meter yang berubah.
+Animasi (grafik VU di rail tab, spinner, meter scan) hanya
+jalan selama scan berlangsung. Frame ditulis per baris yang
+berubah, jadi tidak ada flicker layar penuh.
 
 UI
 Tema biru malam: header gradien dengan tile DATZ, kartu
@@ -2278,7 +2287,7 @@ def draw_left(scr: Screen, app: App, x: int, y: int, w: int, h: int) -> None:
         elif not shown:
             shown = placeholder
             style = (FAINT, bg, False, True, False)
-        if not editing and is_focus and int(time.time() * 2) % 2 == 0:
+        if not editing and is_focus:
             shown += "▌"
         avail = inner_w - 4
         if is_focus and not editing and avail > 10:
@@ -3709,6 +3718,8 @@ def run_tui(engine: Path, version: str, demo: bool = False,
                       f"{os.environ.get('TERM', '') or 'unset'}")
             if boot:
                 dispatch(boot_sequence(term, app))
+            prev_rows: list[str] | None = None
+            prev_size: tuple[int, int] = (-1, -1)
             while not app.quit:
                 events = term.events()
                 if term.eof:
@@ -3723,7 +3734,18 @@ def run_tui(engine: Path, version: str, demo: bool = False,
                 app.spinner = (app.spinner + 1) % 4
                 width, height = term.size()
                 screen = draw(app, width, height)
-                term.write(screen.render(True))
+                rows = screen.rows(True)
+                if prev_rows is None or (width, height) != prev_size:
+                    term.write(screen.render(True))
+                else:
+                    changed = "".join(
+                        f"\x1b[{y + 1};1H{row}"
+                        for y, row in enumerate(rows)
+                        if row != prev_rows[y])
+                    if changed:
+                        term.write(changed)
+                prev_rows = rows
+                prev_size = (width, height)
                 if app.quit:
                     break
                 time.sleep(0.05)

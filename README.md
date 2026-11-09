@@ -239,6 +239,10 @@ Pilihan folder output (`F4`): `~/.datz/runs` di Kali, atau `Downloads/datz-runs`
 berguna kalau kamu menyiapkan scan di satu mesin dan membaca laporan di mesin lain.
 Badge lisensi tampil di header kanan (`PRO · customer` atau `TRIAL 19h`).
 
+Saat idle layarnya diam: hanya jam, sparkline CPU, dan kursor field yang berubah.
+Frame ditulis per baris yang berubah saja, jadi tidak ada flicker repaint penuh.
+Animasi (grafik VU di rail tab, spinner, meter scan) hanya jalan selama scan berjalan.
+
 Jalankan dari terminal asli (GNOME Terminal, kitty, xterm, Windows Terminal). `tmux`/`screen`
 didukung; konsol yang tidak mendukung ANSI 256-warna akan keluar lebih dulu dan
 `--diagnose` menjelaskan alasannya.
