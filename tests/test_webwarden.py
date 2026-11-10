@@ -45,6 +45,8 @@ from webwarden.evidence import write_evidence_index
 from webwarden.html import render_html
 from webwarden.httpclient import HttpClient, HttpResult
 from webwarden.models import Finding, ScanResult
+from webwarden import recon as recon_mod
+from webwarden import sarif as sarif_mod
 from webwarden.recon import Probe
 from webwarden.report import render_markdown, write_report
 from webwarden.secrets import scan_text
@@ -1608,6 +1610,104 @@ class ReportTests(unittest.TestCase):
         self.assertIn("## Access-control bypass checks", markdown)
         self.assertIn("BYPASS via header X-Forwarded-For", markdown)
         self.assertIn("Access-control bypass checks: **1** paths", markdown)
+
+
+class SarifTests(unittest.TestCase):
+    def _result(self) -> ScanResult:
+        return ScanResult(
+            target="example.com",
+            scopes=["example.com"],
+            version="0.12.0",
+            started_at="2026-11-10T00:00:00Z",
+            finished_at="2026-11-10T00:05:00Z",
+            findings=[
+                Finding(
+                    title="Exposed .env file", severity="high",
+                    category="sensitive-path", host="example.com",
+                    url="https://example.com/.env",
+                    description="The deployment secret file is served publicly.",
+                    remediation="Remove the file from the web root.",
+                    evidence="APP_KEY=base64:abc", confidence="confirmed",
+                    verified=True, reproductions=2,
+                    evidence_sha256="deadbeef",
+                ),
+                Finding(
+                    title="Open redirect candidate", severity="medium",
+                    category="injection", host="example.com",
+                    url="https://example.com/go?url=//evil.invalid",
+                    description="Response jumped to an off-site host.",
+                    confidence="needs manual verification",
+                ),
+            ],
+        )
+
+    def test_write_report_emits_valid_sarif(self):
+        result = self._result()
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = write_report(result, Path(tmp))
+            self.assertTrue(paths["sarif"].exists())
+            payload = json.loads(paths["sarif"].read_text(encoding="utf-8"))
+        self.assertEqual(payload["version"], "2.1.0")
+        self.assertIn("sarif-schema-2.1.0", payload["$schema"])
+        run = payload["runs"][0]
+        self.assertEqual(run["tool"]["driver"]["name"], "webwarden")
+        self.assertEqual(run["tool"]["driver"]["version"], "0.12.0")
+        self.assertEqual(len(run["results"]), 2)
+
+    def test_levels_and_kinds_follow_verification(self):
+        payload = sarif_mod.build_sarif(self._result())
+        run = payload["runs"][0]
+        by_rule = {rule["id"]: index
+                   for index, rule in enumerate(run["tool"]["driver"]["rules"])}
+        self.assertEqual(by_rule["sensitive-path"], 0)
+        first, second = run["results"]
+        self.assertEqual(first["level"], "error")
+        self.assertEqual(first["kind"], "fail")
+        self.assertTrue(first["properties"]["verified"])
+        self.assertEqual(first["properties"]["evidenceSha256"], "deadbeef")
+        self.assertEqual(second["level"], "warning")
+        self.assertEqual(second["kind"], "open")
+        self.assertNotIn("evidenceSha256", second["properties"])
+        self.assertEqual(
+            first["locations"][0]["physicalLocation"]["artifactLocation"]["uri"],
+            "https://example.com/.env")
+
+    def test_out_of_scope_url_gets_no_location(self):
+        result = self._result()
+        result.findings[0].url = "https://not-in-scope.invalid/.env"
+        result.findings[0].host = "not-in-scope.invalid"
+        run = sarif_mod.build_sarif(result)["runs"][0]
+        self.assertNotIn("locations", run["results"][0])
+
+
+class CertspotterTests(unittest.TestCase):
+    def test_names_are_scoped_normalised_and_deduped(self):
+        rows = json.dumps([
+            {"dns_names": ["*.example.com", "API.example.com", "example.com"]},
+            {"dns_names": ["api.example.com"]},
+            {"dns_names": ["evil.test", "sub.evil.test"]},
+            {"dns_names": None},
+            "not-a-row",
+        ]).encode()
+        with mock.patch.object(recon_mod, "external_get", return_value=rows):
+            names, warning = recon_mod.certspotter("example.com")
+        self.assertIsNone(warning)
+        self.assertEqual(names, ["api.example.com", "example.com"])
+
+    def test_network_failure_degrades_to_warning(self):
+        with mock.patch.object(
+                recon_mod, "external_get",
+                side_effect=OSError("certspotter down")):
+            names, warning = recon_mod.certspotter("example.com")
+        self.assertEqual(names, [])
+        self.assertIn("certspotter lookup failed", warning)
+
+    def test_unexpected_payload_degrades_to_warning(self):
+        with mock.patch.object(recon_mod, "external_get",
+                               return_value=b'{"error": "boom"}'):
+            names, warning = recon_mod.certspotter("example.com")
+        self.assertEqual(names, [])
+        self.assertIn("unexpected payload", warning)
 
 
 class CliGateTests(unittest.TestCase):

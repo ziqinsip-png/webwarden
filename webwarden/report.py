@@ -11,6 +11,7 @@ from .evidence import write_evidence_index
 from .html import render_html
 from .models import Finding, ScanResult
 from .poc import write_script
+from .sarif import build_sarif
 from .scenario import render_coverage, render_scenarios
 
 SEVERITY_LABEL = {
@@ -987,6 +988,7 @@ def render_markdown(result: ScanResult, lang: str = "en") -> str:
         "### Subdomains",
         "",
         f"Passive (crt.sh): {len(subdomains.get('crtsh', []))} · "
+        f"certspotter: {len(subdomains.get('certspotter', []))} · "
         f"subfinder: {len(subdomains.get('subfinder', []))} · "
         f"DNS brute: {len(subdomains.get('brute', []))} · "
         f"certificate SAN: {len(subdomains.get('san', []))} · "
@@ -1367,8 +1369,11 @@ def write_report(result: ScanResult, outdir: Path,
         encoding="utf-8",
     )
     scan_path.write_text(json.dumps(result.to_dict(), indent=2), encoding="utf-8")
+    sarif_path = outdir / "report.sarif"
+    sarif_path.write_text(
+        json.dumps(build_sarif(result), indent=2), encoding="utf-8")
     evidence_index = write_evidence_index(outdir, findings)
-    secured = [markdown_path, html_path, findings_path, scan_path]
+    secured = [markdown_path, html_path, findings_path, scan_path, sarif_path]
     if result.audit:
         secured.extend([audit_md_path, audit_json_path])
     if evidence_index:
@@ -1391,6 +1396,7 @@ def write_report(result: ScanResult, outdir: Path,
         "html": html_path,
         "findings": findings_path,
         "scan": scan_path,
+        "sarif": sarif_path,
         "poc": poc_path,
     }
     if result.audit:

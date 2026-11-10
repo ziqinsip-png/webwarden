@@ -156,7 +156,7 @@ Python 3.10+. Tidak perlu API key, tidak perlu akun, tidak ada telemetri.
 
 | Modul | Default | Isi |
 |---|---|---|
-| Subdomain | aktif | DNS brute-force (wordlist bawaan/`--wordlist`), pasif via crt.sh dan subfinder bila tersedia |
+| Subdomain | aktif | DNS brute-force (wordlist bawaan/`--wordlist`), pasif dari dua log sertifikat (crt.sh + certspotter) dan subfinder bila tersedia; `--verify-passive` membuang nama tanpa record A/AAAA sebelum di-probe |
 | Probing | aktif | HTTP/HTTPS, status, judul, redirect, port pada apex (`--ports`, `--no-ports`) |
 | Header & HTTPS | aktif | HSTS, CSP, cookie flags, mTLS hint, matrix keamanan |
 | CORS | aktif | Origin reflection, `null`, wildcard — hanya membaca |
@@ -349,6 +349,7 @@ Satu run menulis folder baru berisi:
 report.md        laporan Markdown, bilingual, dengan blok bukti
 report.html      satu file mandiri: grafik severity, chain, matriks header, filter temuan
 scan.json        hasil terstruktur untuk audit ulang, diff, atau pipeline
+report.sarif     SARIF 2.1.0 untuk GitHub Code Scanning / DefectDojo / CI
 poc.sh           perintah replikasi read-only per temuan, siap diaudit
 evidence/        respons server verbatim (TIDAK diredaksi, TIDAK dipotong)
 audit/           hasil audit lokal (heuristik atau Ollama)
@@ -357,6 +358,22 @@ disclosure.md    draft laporan siap kirim ke vendor, dibuat dengan --disclosure
 
 Semua berada di folder run pilihan kamu (`~/.datz/runs` atau `Downloads/datz-runs`) dan
 mencetak stempel lisensi di dalam laporan.
+
+### SARIF untuk CI
+
+`report.sarif` mengikuti standar SARIF 2.1.0: severity dipetakan ke level
+(`critical`/`high` → error, `medium` → warning, `low`/`info` → note), dan temuan
+yang belum reproduce ditandai `"kind": "open"` — bukan `fail`. Jadi dashboard
+tidak akan pernah membaca kandidat sebagai fakta.
+
+```bash
+# GitHub Code Scanning (dari repo yang menyimpan asetnya)
+gh api --method PUT -H "Content-Type: application/sarif+json" \
+  "/repos/OWNER/REPO/code-scanning/sarifs" \
+  -F ref="$(git rev-parse HEAD)" -F sarif="$(gzip -9c report.sarif | base64 -w0)"
+```
+
+Tool lain (DefectDojo, SecurityScorecard, GitLab) tinggal membaca file yang sama.
 
 ---
 
@@ -409,7 +426,7 @@ paling stabil tetap Kali/WSL2.
 
 **Dataku dikirim ke mana?** Tidak ke mana-mana. Audit AI default memakai heuristik lokal; opsi
 `--ai-audit ollama` berbicara ke Ollama di mesin kamu. Satu-satunya request keluar adalah ke
-target yang kamu scan (dan crt.sh untuk rekon pasif).
+target yang kamu scan (dan crt.sh + certspotter untuk rekon pasif).
 
 **Boleh ikut belajar dari source-nya?** Sangat boleh. Baca `checks.py` dan `chains.py`, jalankan
 di lab milikmu sendiri, dan bandingkan temuan dengan realitas.

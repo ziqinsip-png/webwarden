@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-__version__ = "0.12.0"
+__version__ = "0.13.0"
 
 AUTHORIZED_USE_NOTICE = (
     "Use webwarden only on domains you own or are explicitly authorized to test "

@@ -41,6 +41,7 @@ from .recon import (
     brute_subdomains,
     crawl,
     crt_sh,
+    certspotter,
     probe_hosts,
     scan_ports,
     subfinder,
@@ -94,7 +95,7 @@ DEFAULT_WORDS = [
 TOOL_CHECKS = (
     ("whois", "WHOIS records"),
     ("nmap", "port scanning (fallback: built-in)"),
-    ("subfinder", "passive subdomains (fallback: crt.sh)"),
+    ("subfinder", "passive subdomains (fallback: crt.sh + certspotter)"),
     ("openssl", "certificate decoding (fallback: Python)"),
     ("nuclei", "optional template matching (--nuclei)"),
 )
@@ -200,7 +201,7 @@ def build_parser() -> argparse.ArgumentParser:
         "QUICK START\n"
         "  One command runs recon, every read-only check, exploit-chain\n"
         "  analysis, and a local audit, then writes report.md, report.html,\n"
-        "  scan.json, poc.sh, and evidence/:\n"
+        "  scan.json, report.sarif, poc.sh, and evidence/:\n"
         "\n"
         "      webwarden scan example.com --i-am-authorized\n"
         "      webwarden scan example.com --i-am-authorized --full\n"
@@ -235,7 +236,7 @@ def build_parser() -> argparse.ArgumentParser:
             "headers, sensitive paths, CORS, cookies/JWT, client-side secrets,\n"
             "bundle drift, injection (SQLi/SSTI/XSS/LFI/SSRF/CRLF), backdoors,\n"
             "and subdomain takeover. Outputs report.md, report.html, scan.json,\n"
-            "poc.sh, evidence/, and audit/."
+            "report.sarif, poc.sh, evidence/, and audit/."
         ),
         epilog=(
             "EXAMPLES\n"
@@ -292,7 +293,10 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--no-brute", action="store_true",
                       help="skip DNS brute force for subdomains")
     scan.add_argument("--no-passive", action="store_true",
-                      help="skip crt.sh and subfinder")
+                      help="skip the crt.sh and certspotter certificate logs")
+    scan.add_argument("--verify-passive", action="store_true",
+                      help="resolve crt.sh/certspotter names first and drop the "
+                           "ones with no A/AAAA record before probing")
     scan.add_argument("--wordlist", help="custom subdomain wordlist")
     scan.add_argument("--recon-only", action="store_true",
                       help="recon and report only; skip vulnerability checks")
@@ -734,14 +738,18 @@ def cmd_scan(args) -> int:
         dns_records[record] = resolver.query(target, record)
     dns_records["CNAME"] = resolver.query(f"www.{target}", "CNAME")
 
-    _say(quiet, "[3/7] subs     crt.sh, subfinder, DNS brute")
+    _say(quiet, "[3/7] subs     crt.sh, certspotter, subfinder, DNS brute")
     crt_names: list[str] = []
+    certspotter_names: list[str] = []
     subfinder_names: list[str] = []
     brute_names: list[str] = []
     if not args.no_passive:
         crt_names, crt_warning = crt_sh(target)
         if crt_warning:
             warnings.append(crt_warning)
+        certspotter_names, certspotter_warning = certspotter(target)
+        if certspotter_warning:
+            warnings.append(certspotter_warning)
         subfinder_names, subfinder_warning = subfinder(target)
         if subfinder_warning:
             warnings.append(subfinder_warning)
@@ -756,6 +764,24 @@ def cmd_scan(args) -> int:
         if brute_warning:
             warnings.append(brute_warning)
 
+    if args.verify_passive and (crt_names or certspotter_names):
+        _say(quiet, "       verify resolving passive certificate-log names")
+        live: list[str] = []
+        for name in sorted(set(crt_names) | set(certspotter_names)):
+            try:
+                resolved = resolver.exists(name)
+            except Exception:
+                resolved = False
+            if resolved:
+                live.append(name)
+        dropped = len(set(crt_names) | set(certspotter_names)) - len(live)
+        crt_names = [name for name in crt_names if name in live]
+        certspotter_names = [name for name in certspotter_names if name in live]
+        if dropped > 0:
+            warnings.append(
+                f"--verify-passive: {dropped} certificate-log name(s) had no "
+                "A/AAAA record and were dropped before probing")
+
     hosts: list[str] = []
 
     def add_host(name: str | None) -> None:
@@ -767,7 +793,7 @@ def cmd_scan(args) -> int:
 
     add_host(target)
     add_host(f"www.{target}")
-    for name in crt_names + subfinder_names + brute_names:
+    for name in crt_names + certspotter_names + subfinder_names + brute_names:
         add_host(name)
     if len(hosts) > args.max_hosts:
         warnings.append(f"host list truncated to {args.max_hosts}")
@@ -993,6 +1019,7 @@ def cmd_scan(args) -> int:
 
     subdomains = {
         "crtsh": crt_names,
+        "certspotter": certspotter_names,
         "subfinder": subfinder_names,
         "brute": brute_names,
         "san": san_hosts,
@@ -1196,6 +1223,7 @@ def cmd_scan(args) -> int:
         print(f"audit       {paths['audit']}")
     print(f"findings    {paths['findings']}")
     print(f"raw scan    {paths['scan']}")
+    print(f"sarif       {paths['sarif']}")
     print(f"poc         {paths['poc']}")
     if findings:
         print("")

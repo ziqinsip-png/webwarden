@@ -181,6 +181,31 @@ def crt_sh(domain: str, timeout: float = 30.0) -> tuple[list[str], str | None]:
     return sorted(names)[:2000], None
 
 
+def certspotter(domain: str, timeout: float = 30.0,
+                limit: int = 4000) -> tuple[list[str], str | None]:
+    """Second Certificate Transparency source, independent of crt.sh."""
+    url = ("https://api.certspotter.com/v1/issuances?domain="
+           + urllib.parse.quote_plus(domain)
+           + "&include_subdomains=true&expand=dns_names")
+    try:
+        rows = json.loads(external_get(url, timeout=timeout).decode(
+            "utf-8", "replace").strip() or "[]")
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        return [], f"certspotter lookup failed: {exc}"
+    if not isinstance(rows, list):
+        return [], "certspotter returned an unexpected payload"
+
+    names: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        for value in row.get("dns_names") or []:
+            name = str(value).strip().lower().lstrip("*.").rstrip(".")
+            if name and in_scope(name, [domain]):
+                names.add(name)
+    return sorted(names)[:limit], None
+
+
 def subfinder(domain: str, timeout: float = 180.0) -> tuple[list[str], str | None]:
     executable = shutil.which("subfinder")
     if not executable:

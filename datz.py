@@ -52,7 +52,7 @@ import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
 
-APP_VERSION = "2.11.0"
+APP_VERSION = "2.12.0"
 ENGINE_NAME = "webwarden"
 HOME = Path(os.environ.get("DATZ_HOME") or (Path.home() / ".datz"))
 RUNTIME_DIR = HOME / "runtime"
@@ -293,6 +293,7 @@ class ScanOptions:
     no_ports: bool = False
     no_brute: bool = False
     no_passive: bool = False
+    verify_passive: bool = False
     allow_intercepted: bool = False
     user_agent: str = ""
     out: str = ""
@@ -365,6 +366,7 @@ def options_from_payload(payload: dict) -> ScanOptions:
         no_ports=bool(payload.get("no_ports")),
         no_brute=bool(payload.get("no_brute")),
         no_passive=bool(payload.get("no_passive")),
+        verify_passive=bool(payload.get("verify_passive")),
         allow_intercepted=bool(payload.get("allow_intercepted")),
         user_agent=str(payload.get("user_agent", "")).strip(),
         out=str(payload.get("out", "")).strip(),
@@ -394,6 +396,8 @@ def build_scan_argv(engine: Path, opts: ScanOptions, outdir: Path) -> list[str]:
         argv.append("--no-brute")
     if opts.no_passive:
         argv.append("--no-passive")
+    if opts.verify_passive:
+        argv.append("--verify-passive")
     if opts.recon_only:
         argv.append("--recon-only")
     if opts.bypass:
@@ -1322,6 +1326,7 @@ class App:
         self.no_ports = False
         self.no_brute = False
         self.no_passive = False
+        self.verify_passive = False
         self.allow_intercepted = False
         self.user_agent = ""
         self.focus = "target"
@@ -1405,6 +1410,7 @@ class App:
             "no_ports": self.no_ports,
             "no_brute": self.no_brute,
             "no_passive": self.no_passive,
+            "verify_passive": self.verify_passive,
             "allow_intercepted": self.allow_intercepted,
             "user_agent": self.user_agent,
         }
@@ -1824,7 +1830,8 @@ class App:
         ("recon_only", "Recon only", "toggle"),
         ("no_ports", "Skip port scan", "toggle"),
         ("no_brute", "Skip DNS brute", "toggle"),
-        ("no_passive", "Skip crt.sh/subfinder", "toggle"),
+        ("no_passive", "Skip crt.sh/certspotter", "toggle"),
+        ("verify_passive", "Verify CT names by DNS", "toggle"),
         ("allow_intercepted", "Allow intercepted DNS", "toggle"),
     )
 
@@ -4391,6 +4398,7 @@ def headless(args, engine: Path, dest: str = "runs") -> int:
         "no_ports": args.no_ports,
         "no_brute": args.no_brute,
         "no_passive": args.no_passive,
+        "verify_passive": args.verify_passive,
         "allow_intercepted": args.allow_intercepted,
         "user_agent": args.user_agent or "",
         "out": args.out or "",
@@ -4724,6 +4732,7 @@ def build_cli() -> argparse.ArgumentParser:
     parser.add_argument("--no-ports", action="store_true")
     parser.add_argument("--no-brute", action="store_true")
     parser.add_argument("--no-passive", action="store_true")
+    parser.add_argument("--verify-passive", action="store_true")
     parser.add_argument("--allow-intercepted", action="store_true")
     parser.add_argument("--user-agent", default="")
     parser.add_argument("--out", default="")
