@@ -88,8 +88,16 @@ datz --version
 
 ### 2. Satu file, tanpa install
 
-`datz.py` adalah file tunggal yang bisa berisi mesin di dalamnya (zipapp ter-encode base64,
-diverifikasi SHA-256 saat ekstraksi pertama kali). **Repo ini menyimpan template dengan payload
+Cara tercepat: unduh hasil build dari halaman Release, jalankan langsung.
+
+```bash
+curl -L -o datz.py https://github.com/ziqinsip-png/webwarden/releases/latest/download/datz.py
+python3 datz.py
+```
+
+Atau bangun sendiri dari source. `datz.py` adalah file tunggal yang bisa berisi mesin
+di dalamnya (zipapp ter-encode base64, diverifikasi SHA-256 saat ekstraksi pertama kali).
+**Repo ini menyimpan template dengan payload
 kosong**, supaya source engine hanya ada satu kali di history — bangun dulu file tunggalnya, lalu
 jalankan hasil build:
 
