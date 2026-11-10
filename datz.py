@@ -28,6 +28,7 @@ sends GET/HEAD only, never logs in, never writes, and never runs exploit steps.
 from __future__ import annotations
 
 import argparse
+import atexit
 import base64
 import ctypes
 import hashlib
@@ -51,7 +52,7 @@ import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
 
-APP_VERSION = "2.10.0"
+APP_VERSION = "2.11.0"
 ENGINE_NAME = "webwarden"
 HOME = Path(os.environ.get("DATZ_HOME") or (Path.home() / ".datz"))
 RUNTIME_DIR = HOME / "runtime"
@@ -590,6 +591,24 @@ RESET = "\x1b[0m"
 CLEAR = "\x1b[2J"
 HOME_CURSOR = "\x1b[H"
 CLEAR_LINE = "\x1b[K"
+
+# A previous run that was killed, or a binary file catted to the tty, can leave
+# mouse tracking, bracketed paste, an alternate screen or a shifted G0/G1
+# charset behind. Clear all of it before painting, and restore it on the way
+# out even when the process dies from a signal.
+TERM_SANITIZE = (
+    "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1015l"
+    "\x1b[?2004l\x1b[?25h\x1b[?1049l\x1b[?7h\x1b[?1l\x1b>"
+    "\x1b(B\x1b)B\x1b[0m"
+)
+TERM_ENTER = ("\x1b[?1049h\x1b[?25l\x1b[?7l"
+              "\x1b[?1000h\x1b[?1006h\x1b[2J" + HOME_CURSOR)
+TERM_EXIT = ("\x1b[?1006l\x1b[?1000l\x1b[?7h\x1b[?25h\x1b[?1049l"
+             "\x1b[0m\x1b(B")
+# Synchronized output: terminals that understand it present the whole frame at
+# once instead of tearing mid-write; the rest ignore the private mode.
+SYNC_BEGIN = "\x1b[?2026h"
+SYNC_END = "\x1b[?2026l"
 
 # 256-colour palette: midnight-blue console.
 # Four surfaces stack from canvas to chrome, so panels read as cards rather
@@ -3282,11 +3301,41 @@ class Terminal:
             self.old = termios.tcgetattr(self.fd)
             tty.setcbreak(self.fd)
             signal.signal(signal.SIGWINCH, self._on_resize)
-        self._write("\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h\x1b[2J")
+        self._write(TERM_SANITIZE + TERM_ENTER)
+        self._restored = False
+        atexit.register(self._restore)
+        self._guard_signals()
         return self
 
     def __exit__(self, *exc):
-        self._write("\x1b[?1006l\x1b[?1000l\x1b[?25h\x1b[?1049l")
+        self._restore()
+
+    def _guard_signals(self) -> None:
+        """A killed dashboard must not leave mouse tracking on in the shell."""
+        for sig in (signal.SIGTERM, getattr(signal, "SIGHUP", None),
+                    getattr(signal, "SIGQUIT", None)):
+            if sig is None:
+                continue
+            try:
+                previous = signal.getsignal(sig)
+
+                def handler(signum, frame, previous=previous):
+                    self._restore()
+                    if callable(previous) and previous not in (
+                            signal.SIG_DFL, signal.SIG_IGN):
+                        previous(signum, frame)
+                    else:
+                        sys.exit(128 + signum)
+
+                signal.signal(sig, handler)
+            except (ValueError, OSError, AttributeError):
+                pass
+
+    def _restore(self) -> None:
+        if getattr(self, "_restored", True):
+            return
+        self._restored = True
+        self._write(TERM_EXIT)
         if self.old is not None:
             try:
                 self.termios.tcsetattr(self.fd, self.termios.TCSADRAIN,
@@ -3311,7 +3360,7 @@ class Terminal:
             pass
 
     def write(self, text: str) -> None:
-        self._write(text)
+        self._write(SYNC_BEGIN + text + SYNC_END)
 
     def size(self) -> tuple[int, int]:
         size = shutil.get_terminal_size((100, 30))
@@ -3621,6 +3670,21 @@ def boot_sequence(term: Terminal, app: App,
 # TUI loop
 # --------------------------------------------------------------------------
 
+def reset_terminal() -> int:
+    """Recover a tty left dirty by a killed run or a catted binary file."""
+    try:
+        sys.stdout.write(TERM_SANITIZE + "\x1b[0m\x1b[2J" + HOME_CURSOR)
+        sys.stdout.flush()
+    except OSError:
+        pass
+    print("terminal dibersihkan: mouse tracking mati, charset ASCII, "
+          "kursor tampil, autowrap normal.")
+    print("kalau layar masih aneh, ketik: reset")
+    print("catatan: jangan `cat webwarden.pyz` — itu file biner, isinya "
+          "merusak mode terminal.")
+    return 0
+
+
 EOF_NOTICE = """\
 datz: dashboard berhenti karena stdin terminal tertutup (EOF).
 Ini bukan crash: UI tidak bisa membaca keyboard lagi.
@@ -3637,6 +3701,11 @@ dirender sekali ke layar:
 Dan kirim hasil diagnosa ini:
 
     python3 datz.py --diagnose
+
+Kalau layar masih gerak sendiri atau klik mouse memunculkan
+karakter aneh, bersihkan terminalnya dulu:
+
+    python3 datz.py --reset-term
 """
 
 
@@ -3782,6 +3851,8 @@ def run_tui(engine: Path, version: str, demo: bool = False,
             "datz: dashboard berhenti karena error tak terduga.\n"
             + crash.rstrip() + "\n"
             f"log: {LOG_PATH}\n"
+            "terminal sudah dipulihkan; kalau layar masih aneh jalankan:\n"
+            "    python3 datz.py --reset-term\n"
         )
         return 1
     if reason == "eof":
@@ -4574,6 +4645,9 @@ def build_cli() -> argparse.ArgumentParser:
             "  Dashboard langsung keluar / layar kosong (diagnosa):\n"
             "      python3 datz.py --diagnose\n"
             "\n"
+            "  Layar gerak sendiri / karakter nyasar saat klik mouse:\n"
+            "      python3 datz.py --reset-term\n"
+            "\n"
             "  Render dashboard ke stdout (tes/CI, tanpa TUI):\n"
             "      python3 datz.py --snapshot --demo --width 110 --height 32\n"
             "      python3 datz.py --snapshot --demo --tab findings\n"
@@ -4592,6 +4666,9 @@ def build_cli() -> argparse.ArgumentParser:
                              "dengan nilai: pasang kunci lalu keluar")
     parser.add_argument("--diagnose", action="store_true",
                         help="cetak info TTY/terminal/engine/sensor lalu keluar")
+    parser.add_argument("--reset-term", action="store_true",
+                        help="bersihkan terminal (mouse tracking/charset "
+                             "ketinggalan) lalu keluar")
     parser.add_argument("--report", nargs="?", const="", metavar="RUN",
                         help="cetak ringkasan run (default: yang terakhir) "
                              "ke terminal seperti CLI lama")
@@ -4677,6 +4754,8 @@ def main(argv: list[str] | None = None) -> int:
         return license_flow(engine, args.license)
     if args.diagnose:
         return diagnose()
+    if args.reset_term:
+        return reset_terminal()
     if args.report is not None:
         return report_run(args.report)
     if args.disclosure is not None:
