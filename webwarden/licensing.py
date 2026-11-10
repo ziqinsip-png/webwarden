@@ -570,10 +570,11 @@ def status(product: ProductSpec) -> dict:
         out["days_left"] = max(0, TRIAL_DAYS - (today - first).days)
     else:
         out["days_left"] = TRIAL_DAYS
+    source = ""
     try:
         source, payload = resolve_license(product)
     except LicenseError as exc:
-        out.update({"tier": "invalid", "license_file": str(source), "error": str(exc)})
+        out.update({"tier": "invalid", "license_file": source or None, "error": str(exc)})
         return out
     if payload:
         out.update(

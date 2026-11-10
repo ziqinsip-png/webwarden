@@ -177,9 +177,18 @@ class LicenseTests(unittest.TestCase):
         self.assertIn("webwarden license activate", hint)
 
     def test_status_product_label_for_tuple(self):
-        report = licensing.status(
-            (licensing.PRODUCT_WEBWARDEN, licensing.PRODUCT_DATZ))
+        with mock.patch.object(licensing, "resolve_license", return_value=("", None)):
+            report = licensing.status(
+                (licensing.PRODUCT_WEBWARDEN, licensing.PRODUCT_DATZ))
         self.assertEqual(report["product"], "webwarden/datz")
+
+    def test_status_survives_invalid_license_file(self):
+        with mock.patch.object(
+                licensing, "resolve_license",
+                side_effect=licensing.LicenseError("tanda tangan lisensi tidak valid")):
+            report = licensing.status("webwarden")
+        self.assertEqual(report["tier"], "invalid")
+        self.assertIn("tidak valid", report["error"])
 
     def test_expired_license_is_rejected(self):
         key = self.issue(days=-1)
