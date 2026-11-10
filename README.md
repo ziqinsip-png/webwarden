@@ -8,6 +8,10 @@ Satu mesin (`webwarden`), satu konsol terminal penuh warna (`datz.py`), nol depe
 ![license](https://img.shields.io/badge/lisensi-source--available%20%C2%B7%20berbayar-orange)
 ![platform](https://img.shields.io/badge/platform-Kali%20%C2%B7%20Linux%20%C2%B7%20macOS%20%C2%B7%20Windows-lightgrey)
 
+<p align="center">
+  <img src="docs/datz-demo.gif" alt="demo konsol datz — scan read-only, temuan berbukti" width="100%">
+</p>
+
 > **Wajib izin.** Jalankan hanya pada domain yang kamu miliki sendiri atau yang kamu punya
 > izin tertulis untuk uji (scope bug bounty, aset kantor, lab milikmu). `--i-am-authorized`
 > adalah konfirmasi, bukan formalitas.
